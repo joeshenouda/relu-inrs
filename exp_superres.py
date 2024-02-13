@@ -45,17 +45,20 @@ if __name__ == '__main__':
     parser.add_argument('--sigma0', type=float, default=6.0, help='Global scaling for activation')
     parser.add_argument('--layers', type=int, default=2, help='Number of hidden layers')
     parser.add_argument('--width', type=int, default=256, help='Width for layers of MLP')
+    parser.add_argument('--init-scale', type=float, default=1, help='Initial scaling to apply to weights')
     parser.add_argument('--lin-layers', action=argparse.BooleanOptionalAction)
 
     # Training arguments
     parser.add_argument('-lr', '--lr', type=float, default=1e-2, help='Learning rate')
+    parser.add_argument('--lr-decay', type=float, default=0.1, help='LR decay rate')
     parser.add_argument('--epochs', type=int, default=2000, help='Number of iterations')
     parser.add_argument('--lam', type=float, default=0, help='Weight decay/Path Norm param')
     parser.add_argument('--path-norm', action=argparse.BooleanOptionalAction)
     parser.add_argument('--weight-norm', action='store_true', help='Use weight normalization')
     parser.add_argument('--holdout', type=float, default=0, help='Number of points to use for holdout')
     parser.add_argument('--device', type=int, default=0, help='GPU to use')
-    
+    parser.add_argument('--rand-seed', type=int, default=40)
+
     
     
     # Parse the arguments
@@ -82,6 +85,18 @@ if __name__ == '__main__':
     hidden_features = args.width   # Number of hidden units per layer
     device = 'cuda:{}'.format(args.device)
 
+    save_dir = 'results/sisr/{}_SR_img_scale_{}_omega_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_{}'.format(nonlin,
+                                                                                                        scale_im, 
+                                                                                                        omega0, 
+                                                                                                        learning_rate, 
+                                                                                                        args.lam,  
+                                                                                                        args.path_norm, 
+                                                                                                        args.width, 
+                                                                                                        args.layers, 
+                                                                                                        args.epochs,
+                                                                                                        args.lin_layers,                   
+                                                                                                        datetime.now().strftime('%m%d_%H%M'))
+    os.makedirs(save_dir, exist_ok=True)
 
     # Read image
     im = utils.normalize(plt.imread('data/{}.png'.format(args.image)).astype(np.float32), True)
@@ -110,7 +125,7 @@ if __name__ == '__main__':
         posencode = False
         sidelength = H
 
-    torch.manual_seed(5)
+    torch.manual_seed(args.rand_seed)
     model = models.get_INR(
                     nonlin=nonlin,
                     in_features=2,
@@ -123,18 +138,19 @@ if __name__ == '__main__':
                     pos_encode=posencode,
                     sidelength=sidelength,
                     weight_norm=args.weight_norm,
+                    init_scale = args.init_scale,
                     linear_layers=args.lin_layers)
     
-    activation = {}
-    def get_activation_hook(name):
-        def hook(model, input, output):
-            activation[name] = output.detach()
-        return hook
+    # activation = {}
+    # def get_activation_hook(name):
+    #     def hook(model, input, output):
+    #         activation[name] = output.detach()
+    #     return hook
     
-    if nonlin == 'relu' or nonlin == 'siren' or nonlin=='wire':
-        model.net[hidden_layers-1].register_forward_hook(get_activation_hook('last_feat'))
-    else:
-        model.net[hidden_layers-1].bspline_w.register_forward_hook(get_activation_hook('last_feat'))
+    # if nonlin == 'relu' or nonlin == 'siren' or nonlin=='wire':
+    #     model.net[hidden_layers-1].register_forward_hook(get_activation_hook('last_feat'))
+    # else:
+    #     model.net[hidden_layers-1].bspline_w.register_forward_hook(get_activation_hook('last_feat'))
 
     print(model)
         
@@ -150,7 +166,7 @@ if __name__ == '__main__':
 
     
     # Schedule to 0.1 times the initial rate
-    scheduler = LambdaLR(optim, lambda x: 0.2**min(x/niters, 1))
+    scheduler = LambdaLR(optim, lambda x: args.lr_decay**min(x/niters, 1))
     
     x = torch.linspace(-1, 1, W2).to(device)
     y = torch.linspace(-1, 1, H2).to(device)
@@ -189,24 +205,12 @@ if __name__ == '__main__':
     
     downsampler = torch.nn.AvgPool2d(scale)
 
-    save_dir = 'results/sisr/{}_SR_img_scale_{}_omega_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_epochs_{}_{}'.format(nonlin,
-                                                                                                        scale_im, 
-                                                                                                        omega0, 
-                                                                                                        learning_rate, 
-                                                                                                        args.lam,  
-                                                                                                        args.path_norm, 
-                                                                                                        args.width, 
-                                                                                                        args.layers, 
-                                                                                                        args.epochs,         
-                                                                                                        datetime.now().strftime('%m%d_%H%M'))
-    os.makedirs(save_dir, exist_ok=True)
-
     tbar = tqdm(range(niters))
     for epoch in tbar:
         #rec = model(coords)
         
         rec_hr = model(coords_hr)
-        atoms_dict = activation['last_feat'].detach().squeeze().T
+        # atoms_dict = activation['last_feat'].detach().squeeze().T
         rec = downsampler(rec_hr.reshape(H, W, 3).permute(2, 0, 1)[None, ...])
 
         if args.lin_layers:
@@ -260,7 +264,7 @@ if __name__ == '__main__':
         
             mse_lr_array[epoch] = loss.item()
 
-            if args.bottleneck:
+            if args.lin_layers:
                 tbar.set_description('{:2f}: Loss LR {:e}, Path Norm: {}'.format(-10*torch.log10(mse_hr_array[epoch]),loss.item(), path_norm.item()))
             else:
                 tbar.set_description('{:2f}: Loss LR {:e}'.format(-10*torch.log10(mse_hr_array[epoch]),loss.item()))
@@ -268,10 +272,10 @@ if __name__ == '__main__':
             tbar.refresh()
             
             
-        if epoch % 200 == 0:
-            cond_num = torch.linalg.cond(atoms_dict)
-            cond_num_iters.append(epoch)
-            cond_num_array.append(cond_num.item())
+        # if epoch % 200 == 0:
+        #     cond_num = torch.linalg.cond(atoms_dict)
+        #     cond_num_iters.append(epoch)
+        #     cond_num_array.append(cond_num.item())
         
         if epoch % 10000 == 0:
             np.save(os.path.join(save_dir, 'mse_hr_array_t_{}'.format(epoch)), mse_hr_array.cpu().numpy())
@@ -292,8 +296,8 @@ if __name__ == '__main__':
             best_mse = mse_hr_array[epoch]
             best_img = imrec
 
-        if args.path_norm:
-            loss = loss+lam*path_norm
+        if args.path_norm and args.lin_layers:
+            loss = loss+args.lam*path_norm
         
         
         loss.backward()
@@ -329,14 +333,14 @@ if __name__ == '__main__':
     #       lpips_array.min().item())
     print(-10*torch.log10(best_mse))
     
-    plt.imsave(os.path.join(save_dir, 'SR_diff_%s.png'%nonlin),
+    plt.imsave(os.path.join(save_dir, 'SR_diff_%s.pdf'%nonlin),
                np.clip(abs(im - best_img), 0, 1),
                vmin=0.0,
                vmax=0.1)
 
-    plt.imsave(os.path.join(save_dir, 'recon.png'), np.clip(imrec, 0, 1))
-    plt.imsave(os.path.join(save_dir, 'im_lr.png'), np.clip(im_lr, 0, 1))
-    plt.imsave(os.path.join(save_dir, 'im_hr.png'), np.clip(im, 0, 1))
+    plt.imsave(os.path.join(save_dir, 'recon.pdf'), np.clip(imrec, 0, 1), dpi=500)
+    plt.imsave(os.path.join(save_dir, 'im_lr.pdf'), np.clip(im_lr, 0, 1), dpi=300)
+    plt.imsave(os.path.join(save_dir, 'im_hr.pdf'), np.clip(im, 0, 1),    dpi=300)
 
     
     if args.holdout == 0:

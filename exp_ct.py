@@ -36,6 +36,8 @@ if __name__ == '__main__':
     parser.add_argument('--width', type=int, default=256, help='Width for layers of MLP')
     parser.add_argument('--layers', type=int, default=2, help='Number of hidden layers')
     parser.add_argument('--lin-layers', action = argparse.BooleanOptionalAction, help='Adds linear layers in-between')
+    parser.add_argument('--skip-conn', action = argparse.BooleanOptionalAction, help='Add skip connection')
+
 
     parser.add_argument('--meas', type=int, default=100, help='Number of projection measurements')
     
@@ -45,6 +47,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--lam', type=float, default=0, help='Weight decay/Path Norm param')
     parser.add_argument('--path-norm', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--stop-loss', type=float, default=0, help='Stop at this loss')
 
     parser.add_argument('--weight-norm', action='store_true', help='Use weight normalization')
     parser.add_argument('--no-lr-scheduler', action='store_true', help='No LR scheduler')
@@ -81,13 +84,15 @@ if __name__ == '__main__':
     layers = args.layers
     no_lr_scheduler = args.no_lr_scheduler
 
-    save_dir = 'results/ct/{}_omega_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_epochs_{}_seed_{}_{}'.format(nonlin,
+    save_dir = 'results/ct/{}_omega_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_skip_{}_epochs_{}_seed_{}_{}'.format(nonlin,
                                                                                                     args.omega0, 
                                                                                                     learning_rate, 
                                                                                                     args.lam, 
                                                                                                     args.path_norm, 
                                                                                                     args.width, 
                                                                                                     args.layers, 
+                                                                                                    args.lin_layers,
+                                                                                                    args.skip_conn,                     
                                                                                                     args.epochs,
                                                                                                     args.rand_seed,      
                                                                                                     datetime.now().strftime('%m%d_%H%M'))
@@ -141,7 +146,8 @@ if __name__ == '__main__':
                     sidelength=nmeas,
                     weight_norm=args.weight_norm,
                     init_scale = args.init_scale,
-                    linear_layers = args.lin_layers)
+                    linear_layers = args.lin_layers,
+                    skip_conn = args.skip_conn)
         
     model = model.to(device)
     print(model)
@@ -179,6 +185,8 @@ if __name__ == '__main__':
     
     # Schedule to 0.1 times the initial rate
     scheduler = LambdaLR(optimizer, lambda x: args.lr_decay**min(x/niters, 1))
+    #scheduler = LambdaLR(optimizer, lambda x: 0.1**min(x/9000, niters/9000))
+
     
     best_loss = float('inf')
     loss_array = np.zeros(niters)
@@ -206,16 +214,27 @@ if __name__ == '__main__':
         
         loss_sino = ((sinogram_ten - sinogram_estim)**2).mean()
         loss_sinogram_array[idx] = loss_sino.item()
+        
+        path_norm = 0
 
         if nonlin == 'bspline-w' and args.lin_layers:
-            path_norm = 0
             for l in range(hidden_layers):
                path_norm += omega0*torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
                                              * torch.linalg.norm(model.net[l].block.linear2.weight, dim=0))
             lam = args.lam
             path_norms_array.append(path_norm.item())
         
-        if args.path_norm:
+        elif nonlin=='bspline-w' and args.path_norm:
+            for l in range(hidden_layers):
+                if l == 0:
+                    path_norm += omega0 * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
+                                             * torch.linalg.norm(model.net[l+1].block.linear.weight, dim=1))
+                elif l > 1:
+                    path_norm += omega0 * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1))
+            
+            path_norms_array.append(path_norm.item())
+
+        if args.path_norm and args.lin_layers:
             loss_tot = loss_sino + lam*path_norm
         else:
             loss_tot = loss_sino
@@ -248,12 +267,15 @@ if __name__ == '__main__':
                 best_loss = loss_gt
                 best_im = img_estim
 
-            if args.path_norm:
+            if nonlin == 'bspline-w' and args.path_norm:
                 tbar.set_description('PSNR: {:2f},Loss: {:2e}, PN: {:2f}, LR: {:2e}'\
                                      .format(-10*np.log10(loss_array[idx]), loss_sino.item(), path_norm.item(), lr_array[idx]))
             else:
                 tbar.set_description('PSNR: {:2f}, Loss: {:2e}, Learning Rate: {:2e}'.format(-10*np.log10(loss_array[idx]), loss_sino.item(), lr_array[idx]))                
             tbar.refresh()
+
+            if loss_sino.item() < args.stop_loss:
+                break
     
     img_estim_cpu = best_im.detach().cpu().squeeze().numpy()
     
@@ -262,11 +284,24 @@ if __name__ == '__main__':
     
     np.save(os.path.join(save_dir, 'loss_array'), loss_array)
     np.save(os.path.join(save_dir, 'loss_sino_array'), loss_sinogram_array)
-    np.save(os.path.join(save_dir, 'path_norm_array'), path_norms_array)    
-    # io.savemat(os.path.join(save_dir, 'results.mat'), mdict)
+    np.save(os.path.join(save_dir, 'path_norm_array'), path_norms_array)
+    np.save(os.path.join(save_dir, 'recon_img'), best_im.detach().cpu().numpy().squeeze())
+    np.save(os.path.join(save_dir, 'orig_img'), imten.detach().cpu().numpy().squeeze())
+
+    mdict = {'rec': best_im.detach().cpu().numpy().squeeze(),
+             'gt': imten.detach().cpu().numpy().squeeze(),
+             'mse_sinogram_array': loss_sinogram_array, 
+             'mse_array': loss_array}
+    
+    io.savemat(os.path.join(save_dir, 'results.mat'), mdict)
     torch.save(model.state_dict(), os.path.join(save_dir,'model.pt'))
 
-    plt.imsave(os.path.join(save_dir, 'recon.pdf'), np.clip(best_im.detach().cpu().numpy().squeeze(), 0, 1))
+    # Contrast normalization
+    best_im_np = best_im.detach().cpu().numpy().squeeze()
+    best_im_cn = (best_im_np - np.min(best_im_np))/ (np.max(best_im_np) - np.min(best_im_np))
+
+    plt.imsave(os.path.join(save_dir, 'recon.pdf'), best_im_cn, dpi=300)
+    plt.imsave(os.path.join(save_dir, 'orig.pdf'), np.clip(imten.detach().cpu().numpy().squeeze(), 0, 1), dpi=300)
     
 
     print('PSNR: {:.1f} dB, SSIM: {:.3f}'.format(psnr2, ssim2))
