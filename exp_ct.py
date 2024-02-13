@@ -75,7 +75,7 @@ if __name__ == '__main__':
             id=name
         )
 
-    nonlin = args.act_func      # type of nonlinearity, 'bspline-w', 'wire', 'siren', 'mfn', 'relu', 'posenc', 'gauss'
+    nonlin = args.act_func      # type of nonlinearity, 'bspline-w', 'wire', 'siren', 'relu', 'posenc', 'gauss'
     niters = args.epochs            # Number of SGD iterations
     learning_rate = args.lr        # Learning rate. 
     device = 'cuda:{}'.format(args.device)
@@ -104,7 +104,7 @@ if __name__ == '__main__':
     nmeas = args.meas                # Number of CT measurement
     
     # WIRE works best at 5e-3 to 2e-2, Gauss and SIREN at 1e-3 - 2e-3,
-    # MFN at 1e-2 - 5e-2, and positional encoding at 5e-4 to 1e-3 
+    # and positional encoding at 5e-4 to 1e-3 
 
     
     # Gabor filter constants.
@@ -185,7 +185,6 @@ if __name__ == '__main__':
     
     # Schedule to 0.1 times the initial rate
     scheduler = LambdaLR(optimizer, lambda x: args.lr_decay**min(x/niters, 1))
-    #scheduler = LambdaLR(optimizer, lambda x: 0.1**min(x/9000, niters/9000))
 
     
     best_loss = float('inf')

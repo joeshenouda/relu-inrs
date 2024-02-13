@@ -69,7 +69,7 @@ if __name__ == '__main__':
     learning_rate = args.lr        # Learning rate. 
     
     # WIRE works best at 5e-3 to 2e-2, Gauss and SIREN at 1e-3 - 2e-3,
-    # MFN at 1e-2 - 5e-2, and positional encoding at 5e-4 to 1e-3 
+    # and positional encoding at 5e-4 to 1e-3 
     scale = args.scale                   # Downsampling factor
 
     #scale_im = 1/3

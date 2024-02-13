@@ -1,23 +1,16 @@
 #!/usr/bin/env python
 
-# Somewhat hacky way of importing
 from . import gauss
-from . import mfn
 from . import relu
 from . import siren
 from . import wire
-from . import wire2d
 from . import bspline_w
-from . import bspline
 
 model_dict = {'gauss': gauss,
-              'mfn': mfn,
               'relu': relu,
               'siren': siren,
               'wire': wire,
-              'wire2d': wire2d,
-              'bspline-w': bspline_w,
-              'bspline':bspline
+              'bspline-w': bspline_w
              }
 
 def get_INR(nonlin, in_features, hidden_features, hidden_layers,
