@@ -20,10 +20,11 @@ class BSplineWavelets(nn.Module):
         self.c = scale
 
     def forward(self, x):
-        shift = 1.5
+        #shift = 1.5
                 
         # The shift is to make it symmetric about the y-axis
-        x = self.c * x + shift
+        #x = self.c * x + shift
+        x = self.c * x
 
         term1 = (1 / 6) * F.relu(x)
         term2 = - (8 / 6) * F.relu(x - (1 / 2))
@@ -89,6 +90,7 @@ class BsplineWaveletLayer(nn.Module):
             lin_layer_V = nn.Linear(out_features, 
                                  out_features, 
                                  bias=bias)
+            lin_layer_V.weight.data = init_scale * lin_layer_V.weight.data
             self.wavelon.append(('linear2',lin_layer_V))
 
         self.block= torch.nn.Sequential(collections.OrderedDict(self.wavelon))
@@ -114,7 +116,7 @@ class INR(nn.Module):
                  fn_samples, 
                  use_nyquist, 
                  outermost_linear=True, 
-                 skip_conn=True, 
+                 skip_conn=False, 
                  resnet=False, 
                  weight_norm=False, 
                  init_scale=1,
@@ -175,9 +177,6 @@ class INR(nn.Module):
     
     def forward(self, coords):
         output = self.net(coords)
-        
-        if self.wavelet == 'gabor':
-            return output.real
         
         if self.skip_conn:
             output = output + self.skip_connection(coords)
