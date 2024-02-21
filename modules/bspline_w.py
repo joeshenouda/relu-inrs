@@ -13,30 +13,19 @@ from torch import nn
 import torch.nn.functional as F
 import torch.nn.utils.weight_norm as w_norm
 
-class BSplineWavelets(nn.Module):
-    def __init__(self,  scale=1):
+@torch.jit.script
+def bspline_wavelet(x, scale):
+    return (1 / 6) * F.relu(scale*x) - (8 / 6) * F.relu(scale*x - (1 / 2)) + (23 / 6) * F.relu(scale*x - (1)) - (16 / 3) * F.relu(scale*x - (3 / 2)) + (23 / 6) * F.relu(scale*x - (2)) - (8 / 6) * F.relu(scale*x - (5 / 2)) +(1 / 6) * F.relu(scale*x - (3))
+
+class BSplineWavelet(nn.Module):
+    def __init__(self, scale=1):
         super().__init__()
-        self.name = 'bspline-w'
-        self.c = scale
-
+        self.scale = torch.as_tensor(scale)
+    
     def forward(self, x):
-        #shift = 1.5
-                
-        # The shift is to make it symmetric about the y-axis
-        #x = self.c * x + shift
-        x = self.c * x
-
-        term1 = (1 / 6) * F.relu(x)
-        term2 = - (8 / 6) * F.relu(x - (1 / 2))
-        term3 = (23 / 6) * F.relu(x - (1))
-        term4 = - (16 / 3) * F.relu(x - (3 / 2))
-        term5 = (23 / 6) * F.relu(x - (2))
-        term6 = - (8 / 6) * F.relu(x - (5 / 2))
-        term7 = (1 / 6) * F.relu(x - (3))
-
-        sum = term1 + term2 + term3 + term4 +  term5 + term6 + term7
-
-        return sum
+        output = bspline_wavelet(x, self.scale)
+        
+        return output
 
 
 class BsplineWaveletLayer(nn.Module):
@@ -56,7 +45,15 @@ class BsplineWaveletLayer(nn.Module):
             hidden_features: Number of neurons in this layer.
     '''
     
-    def __init__(self, in_features, out_features, bias=True, weight_norm=False, c=1, init_w = None, init_scale=1, linear_layer=False):
+    def __init__(self, in_features, 
+                 out_features, 
+                 bias=True, 
+                 weight_norm=False, 
+                 c=1, 
+                 init_w = None, 
+                 init_scale=1, 
+                 linear_layer=False, 
+                 optimized_bspline_w=False):
         
         super().__init__()
         
@@ -83,7 +80,11 @@ class BsplineWaveletLayer(nn.Module):
                 lin_layer_W.weight.data = init_w
         
         self.wavelon.append(('linear',lin_layer_W))
-        self.wavelon.append(('bspline_w', BSplineWavelets(scale=c)))
+        
+        if optimized_bspline_w:
+            self.wavelon.append(('bspline_w', OptimizedBSplineWavelets(scale=c)))
+        else:
+            self.wavelon.append(('bspline_w', BSplineWavelet(scale=c)))
 
 
         if self.linear_layer:

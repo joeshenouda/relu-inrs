@@ -5,6 +5,7 @@ import sys
 import tqdm
 from scipy import io
 import argparse
+import time
 
 import numpy as np
 import wandb
@@ -197,7 +198,7 @@ if __name__ == '__main__':
     
     increased_lr = False
     
-    
+    t0 = time.time()
     tbar = tqdm.tqdm(range(niters))
     for idx in tbar:
         # Estimate image       
@@ -275,8 +276,11 @@ if __name__ == '__main__':
 
             if loss_sino.item() < args.stop_loss:
                 break
+    t1 = time.time()
+    total_time = t1-t0
+    print('Total Train Time: {}'.format(total_time))
     
-    img_estim_cpu = best_im.detach().cpu().squeeze().numpy()
+    img_estim_cpu = img_estim.detach().cpu().squeeze().numpy()
     
     psnr2 = utils.psnr(img, img_estim_cpu)
     ssim2 = ssim_func(img, img_estim_cpu, data_range=1)
@@ -284,10 +288,10 @@ if __name__ == '__main__':
     np.save(os.path.join(save_dir, 'loss_array'), loss_array)
     np.save(os.path.join(save_dir, 'loss_sino_array'), loss_sinogram_array)
     np.save(os.path.join(save_dir, 'path_norm_array'), path_norms_array)
-    np.save(os.path.join(save_dir, 'recon_img'), best_im.detach().cpu().numpy().squeeze())
+    np.save(os.path.join(save_dir, 'recon_img'), img_estim_cpu)
     np.save(os.path.join(save_dir, 'orig_img'), imten.detach().cpu().numpy().squeeze())
 
-    mdict = {'rec': best_im.detach().cpu().numpy().squeeze(),
+    mdict = {'rec': img_estim_cpu,
              'gt': imten.detach().cpu().numpy().squeeze(),
              'mse_sinogram_array': loss_sinogram_array, 
              'mse_array': loss_array}
@@ -299,8 +303,8 @@ if __name__ == '__main__':
     best_im_np = best_im.detach().cpu().numpy().squeeze()
     best_im_cn = (best_im_np - np.min(best_im_np))/ (np.max(best_im_np) - np.min(best_im_np))
 
-    plt.imsave(os.path.join(save_dir, 'recon.pdf'), best_im_cn, dpi=300)
-    plt.imsave(os.path.join(save_dir, 'orig.pdf'), np.clip(imten.detach().cpu().numpy().squeeze(), 0, 1), dpi=300)
+    plt.imsave(os.path.join(save_dir, 'recon.pdf'), best_im_cn, cmap='gray', vmin=0, vmax=1, dpi=300)
+    plt.imsave(os.path.join(save_dir, 'orig.pdf'), imten.detach().cpu().numpy().squeeze(), cmap='gray', vmin=0, vmax=1, dpi=300)
     
 
     print('PSNR: {:.1f} dB, SSIM: {:.3f}'.format(psnr2, ssim2))
