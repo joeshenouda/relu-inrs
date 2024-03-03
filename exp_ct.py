@@ -84,7 +84,7 @@ if __name__ == '__main__':
     width = args.width
     layers = args.layers
     no_lr_scheduler = args.no_lr_scheduler
-
+  
     save_dir = 'results/ct/{}_omega_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_skip_{}_epochs_{}_seed_{}_{}'.format(nonlin,
                                                                                                     args.omega0, 
                                                                                                     learning_rate, 
@@ -152,7 +152,6 @@ if __name__ == '__main__':
         
     model = model.to(device)
     print(model)
-    
     # activation = {}
     # def get_activation_hook(name):
     #     def hook(model, input, output):
@@ -182,7 +181,8 @@ if __name__ == '__main__':
         optimizer = torch.optim.Adam(lr=learning_rate, params=model.parameters())
     else:
         optimizer = torch.optim.Adam(lr=learning_rate, params=model.parameters(), weight_decay=lam)
-
+    
+    
     
     # Schedule to 0.1 times the initial rate
     scheduler = LambdaLR(optimizer, lambda x: args.lr_decay**min(x/niters, 1))
@@ -195,7 +195,7 @@ if __name__ == '__main__':
     cond_num_array = np.zeros(niters)
     best_im = None
     path_norms_array = []
-    
+    c_array = np.zeros(niters)
     increased_lr = False
     
     t0 = time.time()
@@ -203,7 +203,9 @@ if __name__ == '__main__':
     for idx in tbar:
         # Estimate image       
         img_estim = model(coords).reshape(-1, H, W)[None, ...]
-        
+        # for name, param in model.named_parameters():
+        #     if param.requires_grad and name=='c':
+        #         print(name, param.data)
         # atoms_dict = activation['last_feat'].detach().squeeze().T
                 
         # cond_num = torch.linalg.cond(atoms_dict)
@@ -214,7 +216,7 @@ if __name__ == '__main__':
         
         loss_sino = ((sinogram_ten - sinogram_estim)**2).mean()
         loss_sinogram_array[idx] = loss_sino.item()
-        
+        c_array[idx] = optimizer.param_groups[-1]['params'][0].item()
         path_norm = 0
 
         if nonlin == 'bspline-w' and args.lin_layers:
@@ -279,7 +281,10 @@ if __name__ == '__main__':
     t1 = time.time()
     total_time = t1-t0
     print('Total Train Time: {}'.format(total_time))
-    
+    # print(optimizer.param_groups[-1]['params'][0].item())
+    # for name, param in model.named_parameters():
+    #         if param.requires_grad and name == 'net.0.c':
+    #             print(name, param.data)
     img_estim_cpu = img_estim.detach().cpu().squeeze().numpy()
     
     psnr2 = utils.psnr(img, img_estim_cpu)
@@ -288,13 +293,15 @@ if __name__ == '__main__':
     np.save(os.path.join(save_dir, 'loss_array'), loss_array)
     np.save(os.path.join(save_dir, 'loss_sino_array'), loss_sinogram_array)
     np.save(os.path.join(save_dir, 'path_norm_array'), path_norms_array)
+    np.save(os.path.join(save_dir, 'c_array'), c_array)
     np.save(os.path.join(save_dir, 'recon_img'), img_estim_cpu)
     np.save(os.path.join(save_dir, 'orig_img'), imten.detach().cpu().numpy().squeeze())
 
     mdict = {'rec': img_estim_cpu,
              'gt': imten.detach().cpu().numpy().squeeze(),
              'mse_sinogram_array': loss_sinogram_array, 
-             'mse_array': loss_array}
+             'mse_array': loss_array,
+             'c_array': c_array}
     
     io.savemat(os.path.join(save_dir, 'results.mat'), mdict)
     torch.save(model.state_dict(), os.path.join(save_dir,'model.pt'))

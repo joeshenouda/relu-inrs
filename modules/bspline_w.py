@@ -18,9 +18,9 @@ def bspline_wavelet(x, scale):
     return (1 / 6) * F.relu(scale*x) - (8 / 6) * F.relu(scale*x - (1 / 2)) + (23 / 6) * F.relu(scale*x - (1)) - (16 / 3) * F.relu(scale*x - (3 / 2)) + (23 / 6) * F.relu(scale*x - (2)) - (8 / 6) * F.relu(scale*x - (5 / 2)) +(1 / 6) * F.relu(scale*x - (3))
 
 class BSplineWavelet(nn.Module):
-    def __init__(self, scale=1):
+    def __init__(self, scale=torch.as_tensor(1)):
         super().__init__()
-        self.scale = torch.as_tensor(scale)
+        self.scale = scale
     
     def forward(self, x):
         output = bspline_wavelet(x, self.scale)
@@ -49,7 +49,7 @@ class BsplineWaveletLayer(nn.Module):
                  out_features, 
                  bias=True, 
                  weight_norm=False, 
-                 c=1, 
+                 c=torch.as_tensor(1), 
                  init_w = None, 
                  init_scale=1, 
                  linear_layer=False, 
@@ -82,9 +82,9 @@ class BsplineWaveletLayer(nn.Module):
         self.wavelon.append(('linear',lin_layer_W))
         
         if optimized_bspline_w:
-            self.wavelon.append(('bspline_w', OptimizedBSplineWavelets(scale=c)))
+            self.wavelon.append(('bspline_w', OptimizedBSplineWavelets(scale=self.c)))
         else:
-            self.wavelon.append(('bspline_w', BSplineWavelet(scale=c)))
+            self.wavelon.append(('bspline_w', BSplineWavelet(scale=self.c)))
 
 
         if self.linear_layer:
@@ -135,6 +135,7 @@ class INR(nn.Module):
         self.net = []
 
         if hidden_layers == 1:
+            first_omega_0 = nn.Parameter(torch.as_tensor(first_omega_0), requires_grad=True)
             self.net.append(self.nonlin(in_features,
                                         hidden_features,
                                         weight_norm=weight_norm,  
@@ -146,6 +147,7 @@ class INR(nn.Module):
             
 
         if hidden_layers > 1:
+            hidden_omega_0 = nn.Parameter(torch.as_tensor(hidden_omega_0), requires_grad=True)
             self.net.append(self.nonlin(in_features,
                                         hidden_features, weight_norm=weight_norm,
                                         c=hidden_omega_0, 
