@@ -121,7 +121,8 @@ class INR(nn.Module):
                  resnet=False, 
                  weight_norm=False, 
                  init_scale=1,
-                 linear_layers=False):
+                 linear_layers=False,
+                 use_c=False):
         
         super().__init__()
         
@@ -135,7 +136,8 @@ class INR(nn.Module):
         self.net = []
 
         if hidden_layers == 1:
-            first_omega_0 = nn.Parameter(torch.as_tensor(first_omega_0), requires_grad=True)
+            if use_c:
+                first_omega_0 = nn.Parameter(torch.as_tensor(first_omega_0), requires_grad=True)
             self.net.append(self.nonlin(in_features,
                                         hidden_features,
                                         weight_norm=weight_norm,  
@@ -147,7 +149,8 @@ class INR(nn.Module):
             
 
         if hidden_layers > 1:
-            hidden_omega_0 = nn.Parameter(torch.as_tensor(hidden_omega_0), requires_grad=True)
+            if use_c:
+                hidden_omega_0 = nn.Parameter(torch.as_tensor(hidden_omega_0), requires_grad=True)
             self.net.append(self.nonlin(in_features,
                                         hidden_features, weight_norm=weight_norm,
                                         c=hidden_omega_0, 

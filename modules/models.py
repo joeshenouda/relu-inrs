@@ -18,7 +18,7 @@ def get_INR(nonlin, in_features, hidden_features, hidden_layers,
             hidden_omega_0=30, scale=10, pos_encode=False,
             sidelength=512, fn_samples=None, use_nyquist=True, skip_conn=False, resnet=False, 
             weight_norm=False, ridgelet_param=False, init_scale=1, assorted_w0=False, 
-            linear_layers=False, bottleneck=False):
+            linear_layers=False, bottleneck=False, use_c=False):
     '''
         Function to get a class instance for a given type of
         implicit neural representation
@@ -67,7 +67,8 @@ def get_INR(nonlin, in_features, hidden_features, hidden_layers,
                         weight_norm=weight_norm,
                         skip_conn=skip_conn,
                         init_scale=init_scale,
-                        linear_layers = linear_layers)
+                        linear_layers = linear_layers,
+                        use_c=use_c)
     else:
         model = inr_mod.INR(in_features,
                             hidden_features,

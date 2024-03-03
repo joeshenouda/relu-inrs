@@ -54,7 +54,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-lr-scheduler', action='store_true', help='No LR scheduler')
     parser.add_argument('--rand-seed', type=int, default=40)
     parser.add_argument('--wandb', action='store_true', help='Turn on wandb')
-    
+    parser.add_argument('--learnable_c', action = argparse.BooleanOptionalAction, help = 'change c into a param or not')
     
     # Parse the arguments
     args = parser.parse_args()
@@ -84,7 +84,7 @@ if __name__ == '__main__':
     width = args.width
     layers = args.layers
     no_lr_scheduler = args.no_lr_scheduler
-  
+    
     save_dir = 'results/ct/{}_omega_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_skip_{}_epochs_{}_seed_{}_{}'.format(nonlin,
                                                                                                     args.omega0, 
                                                                                                     learning_rate, 
@@ -111,7 +111,7 @@ if __name__ == '__main__':
     # Gabor filter constants.
     omega0 = args.omega0    # Frequency of sinusoid or gloabal scaling B-spline wavelet
     sigma0= args.sigma0     # Sigma of Gaussian
-
+    
     # Network parameters
     hidden_layers = layers       # Number of hidden layers in the MLP
     hidden_features = width   # Number of hidden units per layer
@@ -148,7 +148,8 @@ if __name__ == '__main__':
                     weight_norm=args.weight_norm,
                     init_scale = args.init_scale,
                     linear_layers = args.lin_layers,
-                    skip_conn = args.skip_conn)
+                    skip_conn = args.skip_conn,
+                    use_c = args.learnable_c)
         
     model = model.to(device)
     print(model)
@@ -195,7 +196,8 @@ if __name__ == '__main__':
     cond_num_array = np.zeros(niters)
     best_im = None
     path_norms_array = []
-    c_array = np.zeros(niters)
+    if args.learnable_c:
+        c_array = np.zeros(niters)
     increased_lr = False
     
     t0 = time.time()
@@ -216,7 +218,9 @@ if __name__ == '__main__':
         
         loss_sino = ((sinogram_ten - sinogram_estim)**2).mean()
         loss_sinogram_array[idx] = loss_sino.item()
-        c_array[idx] = optimizer.param_groups[-1]['params'][0].item()
+        if args.learnable_c:
+            omega_0 = optimizer.param_groups[-1]['params'][0].item()
+            c_array[idx] = omega_0
         path_norm = 0
 
         if nonlin == 'bspline-w' and args.lin_layers:
