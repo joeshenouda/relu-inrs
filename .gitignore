@@ -6,3 +6,4 @@ results/
 .ipynb_checkpoints/
 modules/.ipynb_checkpoints/
 modules/__pycache__/
+wandb/

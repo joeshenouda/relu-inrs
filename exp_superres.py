@@ -55,6 +55,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=2000, help='Number of iterations')
     parser.add_argument('--lam', type=float, default=0, help='Weight decay/Path Norm param')
     parser.add_argument('--path-norm', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--stop-loss', type=float, default=0, help='Stop at this loss')
     parser.add_argument('--weight-norm', action='store_true', help='Use weight normalization')
     parser.add_argument('--device', type=int, default=0, help='GPU to use')
     parser.add_argument('--rand-seed', type=int, default=40)
@@ -83,7 +84,7 @@ if __name__ == '__main__':
     hidden_layers = args.layers    # Number of hidden layers in the MLP
     hidden_features = args.width   # Number of hidden units per layer
     device = 'cuda:{}'.format(args.device)
-
+    import ipdb; ipdb.set_trace()
     save_dir = 'results/sisr/{}_SR_img_scale_{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_{}'.format(nonlin,
                                                                                                         scale_im,
                                                                                                         c,
@@ -201,7 +202,7 @@ if __name__ == '__main__':
 
         if nonlin == 'bspline-w' and args.lin_layers and args.path_norm:
             for l in range(hidden_layers):
-                path_norm += omega0 * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
+                path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
                                                 * torch.linalg.norm(model.net[l].block.linear2.weight, dim=0))
             lam = args.lam
             path_norms_array.append(path_norm.item())
@@ -209,10 +210,10 @@ if __name__ == '__main__':
         elif nonlin == 'bspline-w' and args.path_norm:
             for l in range(hidden_layers):
                 if l == 0:
-                    path_norm += omega0 * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
+                    path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
                                                     * torch.linalg.norm(model.net[l + 1].block.linear.weight, dim=1))
                 elif l > 1:
-                    path_norm += omega0 * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1))
+                    path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1))
 
             path_norms_array.append(path_norm.item())
 
@@ -230,13 +231,12 @@ if __name__ == '__main__':
             im_rec_np = im_rec.detach().cpu().numpy().squeeze().transpose(1, 2, 0)
             ssim_array.append(ssim_func(im_gt_np, im_rec_np, channel_axis=2))
 
-
         mse_lr_array.append(loss.item())
 
         if nonlin == 'bspline-w' and args.path_norm:
-            tbar.set_description('{:2f}: Loss LR {:e}, Path Norm: {}'.format(-10*torch.log10(mse_hr_array[epoch]), loss.item(), path_norm.item()))
+            tbar.set_description('{:2f}: Loss LR {:e}, Path Norm: {}'.format(-10*np.log10(mse_hr_array[epoch]), loss.item(), path_norm.item()))
         else:
-            tbar.set_description('{:2f}: Loss LR {:e}'.format(-10*torch.log10(mse_hr_array[epoch]), loss.item()))
+            tbar.set_description('{:2f}: Loss LR {:e}'.format(-10*np.log10(mse_hr_array[epoch]), loss.item()))
 
         tbar.refresh()
 
@@ -261,9 +261,12 @@ if __name__ == '__main__':
         scheduler.step()
         optim.zero_grad()
 
+        if loss.item() < args.stop_loss:
+            break
+
     final_mse = mse_hr_array[-1]
     final_path_norm = path_norms_array[-1]
-    print('Final PSNR: {}\n'.format(-10*torch.log10(final_mse)))
+    print('\nFinal PSNR: {}, Final SSIM:{}'.format(-10*np.log10(final_mse), ssim_array[-1]))
     if args.path_norm:
         print('Final Path Norm: {}'.format(final_path_norm))
         

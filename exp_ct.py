@@ -149,7 +149,7 @@ if __name__ == '__main__':
                     init_scale = args.init_scale,
                     linear_layers = args.lin_layers,
                     skip_conn = args.skip_conn,
-                    use_c = args.learnable_c)
+                    learn_c = args.learnable_c)
         
     model = model.to(device)
     print(model)
