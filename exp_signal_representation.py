@@ -39,8 +39,7 @@ if __name__ == '__main__':
     parser.add_argument('--scale-im', type=int, default=1)
     
     # Model settings
-    parser.add_argument('--nonlin', type=str, default='bspline',
-                    help= 'type of nonlinearity, [wire, siren, mfn, relu, posenc, gauss, bspline]')
+    parser.add_argument('-af', '--act-func', type=str, default='bspline-w', help='Activation function to use (wire, bspline-w, relu)')
     parser.add_argument('--lr', type=float, default=5e-3, help='learning rate')
     parser.add_argument('--wd', type=float, default=0, help='weight decay')
     parser.add_argument('--lr-scheduler', type=str, default='LambdaLR', help='Learning rate scheduler to use [none or reduce_plateau, LambdaLR, stepLR] (default: none)')
@@ -51,11 +50,16 @@ if __name__ == '__main__':
     parser.add_argument('--image', type=str, default='camera')
     parser.add_argument('--lam', type=float, default=0, help='Weight decay/Path Norm param')
     parser.add_argument('--path-norm', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--weight-norm', action='store_true', help='Use weight normalization')
 
     parser.add_argument('--layers', type=int, default=3, help='Layers for the MLP')
     parser.add_argument('--epochs', type=int, default=1000, help='Epochs to train for')
-    parser.add_argument('--omega0', type=float, default=1, help='number of omega_0')
-    parser.add_argument('--sigma', type=float, default=10, help='number of sigma_0')
+    
+    parser.add_argument('--omega0', type=float, default=10, help='Global scaling for activation')
+    parser.add_argument('--sigma0', type=float, default=10, help='Global scaling for activation')
+    parser.add_argument('--c', type=int, default=1,help='scaling for bspline-w')
+    parser.add_argument('--init-scale', type=float, default=1, help='Initial scaling to apply to weights')
+    
     parser.add_argument('--rand-seed', type=int, default=40)
     parser.add_argument('--device', type=int, default=1, help='GPU to use')
     args = parser.parse_args()
@@ -63,7 +67,7 @@ if __name__ == '__main__':
     torch.cuda.set_device('cuda:{}'.format(args.device))
     
     scale_im = 1/args.scale_im              # Initial image downsample for memory reasons
-    nonlin = args.nonlin            # type of nonlinearity, 'wire', 'siren', 'mfn', 'relu', 'posenc', 'gauss'
+    nonlin = args.act_func            # type of nonlinearity, 'wire', 'siren', 'mfn', 'relu', 'posenc', 'gauss'
     print(nonlin)
     niters = args.epochs               # Number of SGD iterations
     learning_rate = args.lr        # Learning rat.
@@ -75,7 +79,8 @@ if __name__ == '__main__':
 
     # Gabor filter constants.
     omega0 = args.omega0          # Frequency of sinusoid
-    sigma0 = args.sigma           # Sigma of Gaussian
+    sigma0 = args.sigma0           # Sigma of Gaussian
+    c = args.c
     
     # Network parameters
     hidden_layers = args.layers       # Number of hidden layers in the MLP
@@ -110,16 +115,21 @@ if __name__ == '__main__':
         out_feats=1
     
     model = models.get_INR(
-                nonlin=nonlin,
-                in_features=2,
-                out_features=out_feats, 
-                hidden_features=hidden_features,
-                hidden_layers=hidden_layers,
-                first_omega_0=omega0,
-                hidden_omega_0=omega0,
-                scale=sigma0,
-                pos_encode=posencode,
-                linear_layers=args.lin_layers)
+                    nonlin=nonlin,
+                    in_features=2,
+                    out_features=out_feats, 
+                    hidden_features=hidden_features,
+                    hidden_layers=hidden_layers,
+                    first_omega_0=omega0,
+                    hidden_omega_0=omega0,
+                    c=c,
+                    scale=sigma0,
+                    pos_encode=posencode,
+                    weight_norm=args.weight_norm,
+                    init_scale=args.init_scale,
+                    linear_layers=args.lin_layers)
+
+        
         
 
     print(model)
@@ -205,4 +215,4 @@ if __name__ == '__main__':
     torch.save(model.state_dict(), os.path.join(save_dir,'model.pt'))
 
     plt.imsave(os.path.join(save_dir, 'recon.pdf'), estimate_img.detach().cpu().numpy(), dpi=300)
-    plt.imsave(os.path.join(save_dir, 'orig.pdf'), image, dpi=300)
+    plt.imsave(os.path.join(save_dir, 'orig.pdf'), image, dpi=30)
