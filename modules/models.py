@@ -14,11 +14,10 @@ model_dict = {'gauss': gauss,
              }
 
 def get_INR(nonlin, in_features, hidden_features, hidden_layers,
-            out_features, outermost_linear=True, first_omega_0=30,
+            out_features, outermost_linear=True, c=1, first_omega_0=30,
             hidden_omega_0=30, scale=10, pos_encode=False,
             sidelength=512, fn_samples=None, use_nyquist=True, skip_conn=False, resnet=False, 
-            weight_norm=False, ridgelet_param=False, init_scale=1, assorted_w0=False, 
-            linear_layers=False, bottleneck=False, use_c=False):
+            weight_norm=False, init_scale=1, linear_layers=False, learn_c=False):
     '''
         Function to get a class instance for a given type of
         implicit neural representation
@@ -49,26 +48,19 @@ def get_INR(nonlin, in_features, hidden_features, hidden_layers,
         Output: An INR class instance
     '''
 
-
     inr_mod = model_dict[nonlin]
     if nonlin == 'bspline-w':
         model = bspline_w.INR(in_features,
                         hidden_features,
                         hidden_layers,
                         out_features,
-                        first_omega_0,
-                        hidden_omega_0,
-                        scale,
-                        pos_encode,
-                        sidelength,
-                        fn_samples,
-                        use_nyquist, 
-                        resnet=resnet, 
+                        c,
+                        resnet=resnet,
                         weight_norm=weight_norm,
                         skip_conn=skip_conn,
                         init_scale=init_scale,
                         linear_layers = linear_layers,
-                        use_c=use_c)
+                        learn_c=learn_c)
     else:
         model = inr_mod.INR(in_features,
                             hidden_features,
