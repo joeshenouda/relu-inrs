@@ -1,41 +1,95 @@
+#!/usr/bin/env python
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import scipy.ndimage
 import scipy.special
 import argparse
+from torch import nn
+
+import torch.nn.functional as F
+# from torchmeta.modules import (MetaModule, MetaSequential)
+# from torchmeta.modules.utils import get_subdict
+
+import os
+import sys
+import tqdm
+from scipy import io
+import argparse
+import time
+
+import numpy as np
+import wandb
+from datetime import datetime
+
+import cv2
+import matplotlib.pyplot as plt
+plt.gray()
+
+from skimage.metrics import structural_similarity as ssim_func
+
+import torch
+from torch.optim.lr_scheduler import LambdaLR
+
+from modules import models
+from modules import utils
+from modules import lin_inverse
+
 
 import diff_operators
 
 parser = argparse.ArgumentParser(description='Helmholtz')
-parser.add_argument('-c', '--config_filepath', required=False, is_config_file=True, help='Path to config file.')
-
-parser.add_argument('--logging_root', type=str, default='./logs', help='root for logging')
-parser.add_argument('--experiment_name', type=str, required=True,
-               help='Name of subdirectory in logging_root where summaries and checkpoints will be saved.')
-
 # General training options
 parser.add_argument('--batch_size', type=int, default=32)
-parser.add_argument('--lr', type=float, default=2e-5, help='learning rate. default=2e-5')
-parser.add_argument('--num_epochs', type=int, default=50000,
-               help='Number of epochs to train for.')
 
-parser.add_argument('--epochs_til_ckpt', type=int, default=1000,
-               help='Time interval in seconds until checkpoint is saved.')
-parser.add_argument('--steps_til_summary', type=int, default=100,
-               help='Time interval in seconds until tensorboard summary is saved.')
-parser.add_argument('--model', type=str, default='sine', required=False, choices=['sine', 'tanh', 'sigmoid', 'relu'],
-               help='Type of model to evaluate, default is sine.')
-parser.add_argument('--mode', type=str, default='mlp', required=False, choices=['mlp', 'rbf', 'pinn'],
-               help='Whether to use uniform velocity parameter')
 parser.add_argument('--velocity', type=str, default='uniform', required=False, choices=['uniform', 'square', 'circle'],
                help='Whether to use uniform velocity parameter')
 parser.add_argument('--clip_grad', default=0.0, type=float, help='Clip gradient.')
-parser.add_argument('--use_lbfgs', default=False, type=bool, help='use L-BFGS.')
 
-parser.add_argument('--checkpoint_path', default=None, help='Checkpoint to trained model.')
-opt = parser.parse_args()
+parser.add_argument('-af', '--act-func', type=str, default='bspline-w', help='Activation function to use (wire, bspline-w, relu)')
+parser.add_argument('--lr', type=float, default=5e-3, help='learning rate')
+parser.add_argument('--lr-decay', type=float, default=0.1, help='LR decay rate')
+parser.add_argument('--wd', type=float, default=0, help='weight decay')
+parser.add_argument('--width', type=int, default=256, help='Width for MLP')
+parser.add_argument('--lin-layers', action=argparse.BooleanOptionalAction)
+parser.add_argument('--skip-conn', action = argparse.BooleanOptionalAction, help='Add skip connection')
 
+parser.add_argument('--lam', type=float, default=0, help='Weight decay/Path Norm param')
+parser.add_argument('--path-norm', action=argparse.BooleanOptionalAction)
+parser.add_argument('--weight-norm', action='store_true', help='Use weight normalization')
+
+parser.add_argument('--image_downsampling', action=argparse.BooleanOptionalAction)
+
+parser.add_argument('--layers', type=int, default=3, help='Layers for the MLP')
+parser.add_argument('--epochs', type=int, default=1000, help='Epochs to train for')
+    
+parser.add_argument('--omega0', type=float, default=10, help='Global scaling for activation')
+parser.add_argument('--sigma0', type=float, default=10, help='Global scaling for activation')
+parser.add_argument('--c', type=int, default=1,help='scaling for bspline-w')
+parser.add_argument('--init-scale', type=float, default=1, help='Initial scaling to apply to weights')
+    
+parser.add_argument('--rand-seed', type=int, default=40)
+parser.add_argument('--device', type=int, default=1, help='GPU to use')
+args = parser.parse_args()
+    
+torch.cuda.set_device('cuda:{}'.format(args.device))
+    
+nonlin = args.act_func            # type of nonlinearity, 'wire', 'siren', 'mfn', 'relu', 'posenc', 'gauss'
+print(nonlin)
+niters = args.epochs               # Number of SGD iterations
+learning_rate = args.lr        # Learning rat.
+    
+torch.manual_seed(args.rand_seed)
+
+# Gabor filter constants.
+omega0 = args.omega0          # Frequency of sinusoid
+sigma0 = args.sigma0           # Sigma of Gaussian
+c = args.c
+    
+# Network parameters
+hidden_layers = args.layers       # Number of hidden layers in the MLP
+hidden_features = args.width   # Number of hidden units per layer
+device = 'cuda:{}'.format(args.device)
 ########################################################################################################################
 ############################### Setting up Helmholz dataset ############################################################
 def get_mgrid(sidelen, dim=2):
@@ -79,7 +133,7 @@ def gaussian(x, mu=[0, 0], sigma=1e-4, d=2):
     q = -0.5 * ((x - mu) ** 2).sum(1)
     return torch.from_numpy(1 / np.sqrt(sigma ** d * (2 * np.pi) ** d) * np.exp(q / sigma)).float()
 
-
+# for get the dataset
 class SingleHelmholtzSource(Dataset):
     def __init__(self, sidelength, velocity='uniform', source_coords=[0., 0.]):
         super().__init__()
@@ -164,55 +218,40 @@ class SingleHelmholtzSource(Dataset):
                                     'squared_slowness_grid': squared_slowness_grid,
                                     'wavenumber': self.wavenumber}
 ########################################################################################################################
+# part for creating models
+class ImageDownsampling(nn.Module):
+    '''Generate samples in u,v plane according to downsampling blur kernel'''
 
-class SingleBVPNet(MetaModule):
-    '''A canonical representation network for a BVP.'''
-
-    def __init__(self, out_features=1, type='sine', in_features=2,
-                 mode='mlp', hidden_features=256, num_hidden_layers=3, **kwargs):
+    def __init__(self, sidelength, downsample=False):
         super().__init__()
-        self.mode = mode
+        if isinstance(sidelength, int):
+            self.sidelength = (sidelength, sidelength)
+        else:
+            self.sidelength = sidelength
 
-        if self.mode == 'rbf':
-            self.rbf_layer = RBFLayer(in_features=in_features, out_features=kwargs.get('rbf_centers', 1024))
-            in_features = kwargs.get('rbf_centers', 1024)
-        elif self.mode == 'nerf':
-            self.positional_encoding = PosEncodingNeRF(in_features=in_features,
-                                                       sidelength=kwargs.get('sidelength', None),
-                                                       fn_samples=kwargs.get('fn_samples', None),
-                                                       use_nyquist=kwargs.get('use_nyquist', True))
-            in_features = self.positional_encoding.out_dim
+        if self.sidelength is not None:
+            self.sidelength = torch.Tensor(self.sidelength).cuda().float()
+        else:
+            assert downsample is False
+        self.downsample = downsample
 
-        self.image_downsampling = ImageDownsampling(sidelength=kwargs.get('sidelength', None),
-                                                    downsample=kwargs.get('downsample', False))
-        self.net = FCBlock(in_features=in_features, out_features=out_features, num_hidden_layers=num_hidden_layers,
-                           hidden_features=hidden_features, outermost_linear=True, nonlinearity=type)
-        print(self)
+    def forward(self, coords):
+        if self.downsample:
+            return coords + self.forward_bilinear(coords)
+        else:
+            return coords
 
-    def forward(self, model_input, params=None):
-        if params is None:
-            params = OrderedDict(self.named_parameters())
+    def forward_box(self, coords):
+        return 2 * (torch.rand_like(coords) - 0.5) / self.sidelength
 
-        # Enables us to compute gradients w.r.t. coordinates
-        coords_org = model_input['coords'].clone().detach().requires_grad_(True)
-        coords = coords_org
+    def forward_bilinear(self, coords):
+        Y = torch.sqrt(torch.rand_like(coords)) - 1
+        Z = 1 - torch.sqrt(torch.rand_like(coords))
+        b = torch.rand_like(coords) < 0.5
 
-        # various input processing methods for different applications
-        if self.image_downsampling.downsample:
-            coords = self.image_downsampling(coords)
-        if self.mode == 'rbf':
-            coords = self.rbf_layer(coords)
-        elif self.mode == 'nerf':
-            coords = self.positional_encoding(coords)
+        Q = (b * Y + ~b * Z) / self.sidelength
+        return Q
 
-        output = self.net(coords, get_subdict(params, 'net'))
-        return {'model_in': coords_org, 'model_out': output}
-
-    def forward_with_activations(self, model_input):
-        '''Returns not only model output, but also intermediate activations.'''
-        coords = model_input['coords'].clone().detach().requires_grad_(True)
-        activations = self.net.forward_with_activations(coords)
-        return {'model_in': coords, 'model_out': activations.popitem(), 'activations': activations}
 
 ## To handle complex numbers
 def compl_div(x, y):
@@ -245,15 +284,15 @@ def compl_mul(x, y):
     return out
 
 ## Loss function for this task
-def helmholtz_pml(model_output, gt):
+def helmholtz_pml(model_input, model_output, gt):
     source_boundary_values = gt['source_boundary_values']
 
     if 'rec_boundary_values' in gt:
         rec_boundary_values = gt['rec_boundary_values']
 
     wavenumber = gt['wavenumber'].float()
-    x = model_output['model_in']  # (meta_batch_size, num_points, 2)
-    y = model_output['model_out']  # (meta_batch_size, num_points, 2)
+    x = model_input  # (meta_batch_size, num_points, 2)
+    y = model_output  # (meta_batch_size, num_points, 2)
     squared_slowness = gt['squared_slowness'].repeat(1, 1, y.shape[-1] // 2)
     batch_size = x.shape[1]
 
@@ -411,23 +450,126 @@ def write_helmholtz_summary(model, model_input, gt, writer, total_steps, prefix=
                                                                 scale_each=False, normalize=True),
                          global_step=total_steps)
 
-
+        
 
 # if we have a velocity perturbation, offset the source
-if opt.velocity != 'uniform':
+if args.velocity != 'uniform':
     source_coords = [-0.35, 0.]
 else:
     source_coords = [0., 0.]
 
-dataset = SingleHelmholtzSource(sidelength=230, velocity=opt.velocity, source_coords=source_coords)
+dataset = SingleHelmholtzSource(sidelength=230, velocity=args.velocity, source_coords=source_coords)
 
-dataloader = DataLoader(dataset, shuffle=True, batch_size=opt.batch_size, pin_memory=True, num_workers=0)
+dataloader = DataLoader(dataset, shuffle=True, batch_size=args.batch_size, pin_memory=True, num_workers=0)
+
+
 
 # Define the model.
-if opt.mode == 'pinn':
-    model = modules.PINNet(out_features=2, type='tanh', mode=opt.mode)
-    opt.use_lbfgs = True
-else:
-    model = modules.SingleBVPNet(out_features=2, type=opt.model, mode=opt.mode, final_layer_factor=1.)
 
+# model = SingleBVPNet(out_features=2, type='bspline-w', mode=opt.mode, final_layer_factor=1.)
+
+model = models.get_INR(
+                    nonlin=nonlin,
+                    in_features=2,
+                    out_features=2, 
+                    hidden_features=hidden_features,
+                    hidden_layers=hidden_layers,
+                    first_omega_0=omega0,
+                    hidden_omega_0=omega0,
+                    c=c,
+                    scale=sigma0,
+                    weight_norm=args.weight_norm,
+                    init_scale=args.init_scale,
+                    linear_layers=args.lin_layers)
 model.cuda()
+
+print(model)
+
+# Define the loss
+loss_fn = helmholtz_pml
+
+tbar = tqdm.tqdm(range(args.epochs))
+
+optim = torch.optim.Adam(lr=args.lr, params=model.parameters())
+scheduler = LambdaLR(optim, lambda x: args.lr_decay**min(x/niters, 1))
+total_steps = 0
+train_losses = []
+
+def scale_percentile(pred, min_perc=1, max_perc=99):
+    min = np.percentile(pred.cpu().numpy(),1)
+    max = np.percentile(pred.cpu().numpy(),99)
+    pred = torch.clamp(pred, min, max)
+    return (pred - min) / (max-min)
+
+for idx in tbar:
+    for step, (model_input, gt) in enumerate(dataloader):
+        start_time = time.time()
+            
+        model_input = {key: value.cuda() for key, value in model_input.items()}
+        gt = {key: value.cuda() for key, value in gt.items()}
+
+        
+        coords_org = model_input['coords'].clone().detach().requires_grad_(True)
+        coords = coords_org
+        if args.image_downsampling:
+            image_downsampling = ImageDownsampling(sidelength=model_input.get('sidelength', None),
+                                                  downsample=model_input.get('downsample', False))
+            coords = image_downsampling(coords)
+        model_output = model(coords)
+        losses = loss_fn(coords_org, model_output, gt)
+
+        train_loss = 0.
+        for loss_name, loss in losses.items():
+            single_loss = loss.mean()
+            train_loss += single_loss
+
+        train_losses.append(train_loss.item())
+
+        optim.zero_grad()
+        train_loss.backward()
+
+        if args.clip_grad:
+            if isinstance(clip_grad, bool):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad)
+
+        optim.step()
+        scheduler.step()
+        total_steps += 1 
+        with torch.no_grad():
+            if 'coords_sub' in model_input:
+                summary_model_input = {'coords':coords.repeat(min(2, model_input['coords_sub'].shape[0]),1,1)}
+                summary_model_input['coords_sub'] = model_input['coords_sub'][:2,...]
+                summary_model_input['img_sub'] = model_input['img_sub'][:2,...]
+                pred = model_output
+            else:
+                pred = model_output
+
+            if 'pretrain' in gt:
+                gt['squared_slowness_grid'] = pred[...,-1, None].clone() + 1.
+                if torch.all(gt['pretrain'] == -1):
+                    gt['squared_slowness_grid'] = torch.clamp(pred[...,-1, None].clone(), min=-0.999) + 1.
+                    gt['squared_slowness_grid'] = torch.where((torch.abs(coords[...,0,None]) > 0.75) | (torch.abs(coords[...,1,None]) > 0.75),
+                                            torch.ones_like(gt['squared_slowness_grid']),
+                                            gt['squared_slowness_grid'])
+                pred = pred[...,:-1]
+
+            pred = lin2img(pred)
+
+            pred_cmpl = pred[...,0::2,:,:].cpu().numpy() + 1j * pred[...,1::2,:,:].cpu().numpy()
+            pred_angle = torch.from_numpy(np.angle(pred_cmpl))
+            pred_mag = torch.from_numpy(np.abs(pred_cmpl))
+
+
+            pred = scale_percentile(pred)
+            pred_angle = scale_percentile(pred_angle)
+            pred_mag = scale_percentile(pred_mag)
+
+            pred = pred.permute(1, 0, 2, 3)
+            pred_mag = pred_mag.permute(1, 0, 2, 3)
+            pred_angle = pred_angle.permute(1, 0, 2, 3)
+
+            tbar.set_description('Loss: {:2e}, Learning Rate: {:2e}'.format(train_loss.item(), optim.param_groups[0]['lr']))
+            tbar.refresh()
+           
