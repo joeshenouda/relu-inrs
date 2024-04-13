@@ -166,6 +166,7 @@ if __name__ == '__main__':
                 scale=sigma0,
                 pos_encode=posencode,
                 linear_layers=args.lin_layers)
+        
 
     print(model)
     model = model.to(device)
@@ -232,4 +233,4 @@ if __name__ == '__main__':
     torch.save(model.state_dict(), os.path.join(save_dir, 'model.pt'))
 
     plt.imsave(os.path.join(save_dir, 'recon.pdf'), estimate_img.detach().cpu().numpy(), dpi=300)
-    plt.imsave(os.path.join(save_dir, 'orig.pdf'), image, dpi=300)
+    plt.imsave(os.path.join(save_dir, 'orig.pdf'), image, dpi=30)
