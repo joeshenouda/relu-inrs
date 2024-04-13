@@ -15,9 +15,13 @@ import torch.nn.utils.weight_norm as w_norm
 
 @torch.jit.script
 def bspline_wavelet(x, scale):
-    return (1 / 6) * F.relu(scale*x) - (8 / 6) * F.relu(scale*x - (1 / 2)) + (23 / 6) \
-        * F.relu(scale*x - (1)) - (16 / 3) * F.relu(scale*x - (3 / 2)) + (23 / 6) * F.relu(scale*x - (2)) - (8 / 6) \
-        * F.relu(scale*x - (5 / 2)) +(1 / 6) * F.relu(scale*x - (3))
+    return (1 / 6) * F.relu(scale*x)\
+    - (8 / 6) * F.relu(scale*x - (1 / 2))\
+    + (23 / 6) * F.relu(scale*x - (1))\
+    - (16 / 3) * F.relu(scale*x - (3 / 2))\
+    + (23 / 6) * F.relu(scale*x - (2))\
+    - (8 / 6) * F.relu(scale*x - (5 / 2))\
+    +(1 / 6) * F.relu(scale*x - (3))
 
 class BSplineWavelet(nn.Module):
     def __init__(self, scale=torch.as_tensor(1)):

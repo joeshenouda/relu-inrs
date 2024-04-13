@@ -232,3 +232,8 @@ for step in range(total_steps):
     scheduler.step()
 
 final_model_output = model(model_input)
+rate, _ = wavfile.read('data/gt_bach.wav')
+os.makedirs('results/audio', exist_ok=True)
+bspline_nn_audio = wavfile.write('results/audio/bspline_nn_audio.wav', rate, final_model_output.squeeze().detach().cpu().numpy())
+
+

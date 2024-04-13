@@ -32,22 +32,21 @@ if __name__ == '__main__':
     # Create the parser
     parser = argparse.ArgumentParser(description='SuperRes')
 
-    # Add an argument
-    parser.add_argument('-af', '--act-func', type=str, default='wire', help='Activation function to use (wire, bspline-w, relu)')
-    
-    # Image arguments
-    parser.add_argument('--scale', type=int, default=4, help='Downsampling scale')
-    parser.add_argument('--scale-im', type=int, default=3, help='Initial image downsample for memory reasons')
-    parser.add_argument('--image', type=str, default='butterfly', help='Which pic [butterfly, rhino, nemo]')
-
     # Model arguments
+    parser.add_argument('-af', '--act-func', type=str, default='wire',
+                        help='Activation function to use (wire, bspline-w, relu)')
+    parser.add_argument('--c', type=float, default=1.0, help='Global scaling for BW-ReLU activation')
     parser.add_argument('--omega0', type=float, default=8.0, help='Global scaling for SIREN, WIRE activation')
     parser.add_argument('--sigma0', type=float, default=6.0, help='Global scaling for WIRE activation')
-    parser.add_argument('--c', type=float, default=1.0, help='Global scaling for BW-ReLU activation')
     parser.add_argument('--layers', type=int, default=2, help='Number of hidden layers')
     parser.add_argument('--width', type=int, default=256, help='Width for layers of MLP')
     parser.add_argument('--init-scale', type=float, default=1, help='Initial scaling to apply to weights')
     parser.add_argument('--lin-layers', action=argparse.BooleanOptionalAction)
+
+    # Image arguments
+    parser.add_argument('--scale', type=int, default=4, help='Downsampling scale')
+    parser.add_argument('--scale-im', type=int, default=3, help='Initial image downsample for memory reasons')
+    parser.add_argument('--image', type=str, default='butterfly', help='Which pic [butterfly, rhino, nemo]')
 
     # Training arguments
     parser.add_argument('-lr', '--lr', type=float, default=1e-2, help='Learning rate')
@@ -83,7 +82,7 @@ if __name__ == '__main__':
     # Network parameters
     hidden_layers = args.layers    # Number of hidden layers in the MLP
     hidden_features = args.width   # Number of hidden units per layer
-    device = 'cuda:{}'.format(args.device)
+    device = 'cuda:{}'.format(args.device) if torch.cuda.is_available() else 'cpu'
     import ipdb; ipdb.set_trace()
     save_dir = 'results/sisr/{}_SR_img_scale_{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_{}'.format(nonlin,
                                                                                                         scale_im,
@@ -193,6 +192,7 @@ if __name__ == '__main__':
     
     downsampler = torch.nn.AvgPool2d(scale)
 
+    # Training loop
     tbar = tqdm(range(niters))
     for epoch in tbar:
         rec_hr = model(coords_hr)

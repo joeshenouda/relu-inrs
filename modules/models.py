@@ -1,13 +1,11 @@
 #!/usr/bin/env python
 
-from . import gauss
 from . import relu
 from . import siren
 from . import wire
 from . import bspline_w
 
-model_dict = {'gauss': gauss,
-              'relu': relu,
+model_dict = {'relu': relu,
               'siren': siren,
               'wire': wire,
               'bspline-w': bspline_w
