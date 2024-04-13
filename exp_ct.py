@@ -1,139 +1,141 @@
 #!/usr/bin/env python
-
+from torch.optim.lr_scheduler import LambdaLR
+from modules import models
+from modules import utils
+from modules import lin_inverse
+from skimage.metrics import structural_similarity as ssim_func
 import os
 import sys
 import tqdm
 from scipy import io
 import argparse
 import time
-
 import numpy as np
 import wandb
 from datetime import datetime
-
-import cv2
+import skimage
 import matplotlib.pyplot as plt
-plt.gray()
-
-from skimage.metrics import structural_similarity as ssim_func
-
 import torch
-from torch.optim.lr_scheduler import LambdaLR
-
-from modules import models
-from modules import utils
-from modules import lin_inverse
+plt.gray()
 
 if __name__ == '__main__':
     # Create the parser
     parser = argparse.ArgumentParser(description='CT Reconstruction')
 
-    # Add an argument
-    parser.add_argument('-af', '--act-func', type=str, default='bspline-w', help='Activation function to use (wire, bspline-w)')
+    # Model Arguments
+    parser.add_argument('-af', '--act-func', type=str, default='bspline-w', help='Activation function to use (bspline-w, wire, siren)')
+    parser.add_argument('--c', type=float, default=1.0, help='Global scaling for BW-ReLU activation')
+    parser.add_argument('--omega0', type=float, default=1, help='number of omega_0')
+    parser.add_argument('--sigma0', type=float, default=10, help='number of sigma_0')
+    parser.add_argument('--layers', type=int, default=3, help='Layers for the MLP')
+    parser.add_argument('--width', type=int, default=300, help='Width for MLP')
+    parser.add_argument('--lin-layers', action=argparse.BooleanOptionalAction)
+
+    # Image arguments
+    parser.add_argument('--meas', type=int, default=100, help='Number of projection measurements')
+
+    # Training arguments
     parser.add_argument('-lr', '--lr', type=float, default=5e-3, help='Learning rate')
+    parser.add_argument('--no-lr-scheduler', action='store_true', help='No LR scheduler')
     parser.add_argument('--lr-decay', type=float, default=0.1, help='LR decay rate')
     parser.add_argument('--epochs', type=int, default=5000, help='Number of iterations')
-    parser.add_argument('--device', type=int, default=0, help='GPU to use')
-    parser.add_argument('--width', type=int, default=256, help='Width for layers of MLP')
-    parser.add_argument('--layers', type=int, default=2, help='Number of hidden layers')
-    parser.add_argument('--lin-layers', action = argparse.BooleanOptionalAction, help='Adds linear layers in-between')
-    parser.add_argument('--skip-conn', action = argparse.BooleanOptionalAction, help='Add skip connection')
-
-
-    parser.add_argument('--meas', type=int, default=100, help='Number of projection measurements')
-    
-    parser.add_argument('--omega0', type=float, default=10, help='Global scaling for activation')
-    parser.add_argument('--sigma0', type=float, default=10, help='Global scaling for activation')
-    parser.add_argument('--init-scale', type=float, default=1, help='Initial scaling to apply to weights')
-    
     parser.add_argument('--lam', type=float, default=0, help='Weight decay/Path Norm param')
     parser.add_argument('--path-norm', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--stop-loss', type=float, default=0, help='Stop at this loss')
-
-    parser.add_argument('--weight-norm', action='store_true', help='Use weight normalization')
-    parser.add_argument('--no-lr-scheduler', action='store_true', help='No LR scheduler')
+    parser.add_argument('--device', type=int, default=0, help='GPU to use')
     parser.add_argument('--rand-seed', type=int, default=40)
+    parser.add_argument('--stop-loss', type=float, default=0, help='Stop at this loss')
     parser.add_argument('--wandb', action='store_true', help='Turn on wandb')
     parser.add_argument('--learnable_c', action = argparse.BooleanOptionalAction, help = 'change c into a param or not')
     
     # Parse the arguments
     args = parser.parse_args()
 
-    
-    now = datetime.now().strftime("%m%d%Y%H%M")
-    name = ('act_{}_lr_{}_epochs_{}_{}'
-        .format(args.act_func, args.lr, args.epochs, now))
+    nonlin = args.act_func      # type of nonlinearity, 'bspline-w', 'wire', 'siren', 'relu', 'posenc', 'gauss'
+    niters = args.epochs            # Number of SGD iterations
+    learning_rate = args.lr        # Learning rate.
+    lam = args.lam
+    no_lr_scheduler = args.no_lr_scheduler
+
     
     if args.wandb:
+        now = datetime.now().strftime("%m%d%Y%H%M")
+        name = ('act_{}_lr_{}_epochs_{}_{}'
+                .format(args.act_func, args.lr, args.epochs, now))
+        if args.act_func == 'bspline-w':
+            name = ('act_{}_c_{}_lr_{}_epochs_{}_{}'
+                    .format(args.act_func, args.c, args.lr, args.epochs, now))
+        elif args.act_func == 'wire':
+            name = ('act_{}_omega0_{}_sigma0_{}_lr_{}_epochs_{}_{}'
+                    .format(args.act_func, args.omega0, args.sigma0, args.lr, args.epochs, now))
+        elif args.act_func == 'siren':
+            name = ('act_{}_omega0_{}_lr_{}_epochs_{}_{}'
+                    .format(args.act_func, args.omega0, args.lr, args.epochs, now))
+        project_name = 'ct-reconstruction'
         # start a new wandb run to track this script
         run = wandb.init(
             entity='activation-func',
             # set the wandb project where this run will be logged
-            project="ct_wire_vs_bspline",
+            project=project_name,
             name=name,
             # track hyperparameters and run metadata
             config=args,
             id=name
         )
 
-    nonlin = args.act_func      # type of nonlinearity, 'bspline-w', 'wire', 'siren', 'relu', 'posenc', 'gauss'
-    niters = args.epochs            # Number of SGD iterations
-    learning_rate = args.lr        # Learning rate. 
+    # Gabor filter constants.
+    omega0 = args.omega0    # Frequency of sinusoid or gloabal scaling B-spline wavelet
+    sigma0= args.sigma0     # Sigma of Gaussian
+
+    # For BW-ReLU
+    c = args.c
+
+    # Network parameters
+    hidden_layers = args.layers  # Number of hidden layers in the MLP
+    hidden_features = args.width  # Number of hidden units per layer
     device = 'cuda:{}'.format(args.device)
-    lam = args.lam
-    width = args.width
-    layers = args.layers
-    no_lr_scheduler = args.no_lr_scheduler
-    
-    save_dir = 'results/ct/{}_omega_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_skip_{}_epochs_{}_seed_{}_{}'.format(nonlin,
-                                                                                                    args.omega0, 
+
+    save_dir = 'results/ct/{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_seed_{}_{}'.format(nonlin,
+                                                                                                    args.c,
+                                                                                                    args.omega0,
+                                                                                                    args.sigma0,
                                                                                                     learning_rate, 
                                                                                                     args.lam, 
                                                                                                     args.path_norm, 
                                                                                                     args.width, 
                                                                                                     args.layers, 
                                                                                                     args.lin_layers,
-                                                                                                    args.skip_conn,                     
                                                                                                     args.epochs,
                                                                                                     args.rand_seed,      
                                                                                                     datetime.now().strftime('%m%d_%H%M'))
-    os.makedirs(save_dir, exist_ok=True)
-    
-    ## Random seed
-    torch.manual_seed(args.rand_seed)
-    
-    nmeas = args.meas                # Number of CT measurement
-    
-    # WIRE works best at 5e-3 to 2e-2, Gauss and SIREN at 1e-3 - 2e-3,
-    # and positional encoding at 5e-4 to 1e-3 
-
-    
-    # Gabor filter constants.
-    omega0 = args.omega0    # Frequency of sinusoid or gloabal scaling B-spline wavelet
-    sigma0= args.sigma0     # Sigma of Gaussian
-    
-    # Network parameters
-    hidden_layers = layers       # Number of hidden layers in the MLP
-    hidden_features = width   # Number of hidden units per layer
-    
-    # Generate sampling angles
-    thetas = torch.tensor(np.linspace(0, 180, nmeas, dtype=np.float32)).to(device)
-
-    # Create phantom
-    img = cv2.imread('data/chest.png').astype(np.float32)[..., 1]
-    img = utils.normalize(img, True)
-    [H, W] = img.shape
-    imten = torch.tensor(img)[None, None, ...].to(device)
-    
-    print('Image size is {}x{}'.format(H,W))
-    
     # Create model
     if nonlin == 'posenc':
         nonlin = 'relu'
         posencode = True
     else:
         posencode = False
+
+    os.makedirs(save_dir, exist_ok=True)
     
+    # Random seed
+    torch.manual_seed(args.rand_seed)
+    
+    # Generate sampling angles
+    nmeas = args.meas                # Number of CT measurement
+    thetas = torch.tensor(np.linspace(0, 180, nmeas, dtype=np.float32)).to(device)
+
+    # Create phantom
+    img = plt.imread('data/chest.png').astype(np.float32)
+    img = utils.normalize(img, True)
+    [H, W] = img.shape
+    imten = torch.tensor(img)[None, None, ...].to(device)
+
+    with torch.no_grad():
+        sinogram_ten = lin_inverse.radon(imten, thetas)
+
+    imten = torch.tensor(img)[None, None, ...].to(device)
+    
+    print('Image size is {}x{}'.format(H,W))
+
     model = models.get_INR(
                     nonlin=nonlin,
                     in_features=2,
@@ -142,34 +144,15 @@ if __name__ == '__main__':
                     hidden_layers=hidden_layers,
                     first_omega_0=omega0,
                     hidden_omega_0=omega0,
+                    c=c,
                     scale=sigma0,
                     pos_encode=posencode,
                     sidelength=nmeas,
-                    weight_norm=args.weight_norm,
-                    init_scale = args.init_scale,
-                    linear_layers = args.lin_layers,
-                    skip_conn = args.skip_conn,
-                    learn_c = args.learnable_c)
-        
-    model = model.to(device)
-    print(model)
-    # activation = {}
-    # def get_activation_hook(name):
-    #     def hook(model, input, output):
-    #         activation[name] = output.detach()
-    #     return hook
+                    linear_layers=args.lin_layers,
+                    learn_c=args.learnable_c)
 
-    # if nonlin == 'relu' or nonlin == 'siren' or nonlin=='wire':
-    #     model.net[hidden_layers-1].register_forward_hook(get_activation_hook('last_feat'))
-    # else:
-    #     model.net[hidden_layers-1].act_func.register_forward_hook(get_activation_hook('last_feat'))
-    
-    with torch.no_grad():
-        sinogram = lin_inverse.radon(imten, thetas).detach().cpu()
-        sinogram = sinogram.numpy()
-        
-        # Set below to sinogram_noisy instead of sinogram to get noise in measurements
-        sinogram_ten = torch.tensor(sinogram).to(device)
+    print(model)
+    model = model.to(device)
         
     x = torch.linspace(-1, 1, W).to(device)
     y = torch.linspace(-1, 1, H).to(device)
@@ -183,17 +166,13 @@ if __name__ == '__main__':
     else:
         optimizer = torch.optim.Adam(lr=learning_rate, params=model.parameters(), weight_decay=lam)
     
-    
-    
     # Schedule to 0.1 times the initial rate
-    scheduler = LambdaLR(optimizer, lambda x: args.lr_decay**min(x/niters, 1))
+    scheduler = LambdaLR(optimizer, lambda x:args.lr_decay**min(x/niters, 1))
 
-    
     best_loss = float('inf')
     loss_array = np.zeros(niters)
     lr_array = np.zeros(niters)
     loss_sinogram_array = np.zeros(niters)
-    cond_num_array = np.zeros(niters)
     best_im = None
     path_norms_array = []
     if args.learnable_c:
@@ -205,22 +184,12 @@ if __name__ == '__main__':
     for idx in tbar:
         # Estimate image       
         img_estim = model(coords).reshape(-1, H, W)[None, ...]
-        # for name, param in model.named_parameters():
-        #     if param.requires_grad and name=='c':
-        #         print(name, param.data)
-        # atoms_dict = activation['last_feat'].detach().squeeze().T
-                
-        # cond_num = torch.linalg.cond(atoms_dict)
-        # cond_num_array[idx] = cond_num.item()
-        
+
         # Compute sinogram
         sinogram_estim = lin_inverse.radon(img_estim, thetas)
         
         loss_sino = ((sinogram_ten - sinogram_estim)**2).mean()
         loss_sinogram_array[idx] = loss_sino.item()
-        if args.learnable_c:
-            omega_0 = optimizer.param_groups[-1]['params'][0].item()
-            c_array[idx] = omega_0
         path_norm = 0
 
         if nonlin == 'bspline-w' and args.lin_layers:
@@ -230,13 +199,14 @@ if __name__ == '__main__':
             lam = args.lam
             path_norms_array.append(path_norm.item())
         
-        elif nonlin=='bspline-w' and args.path_norm:
-            for l in range(hidden_layers):
-                if l == 0:
-                    path_norm += omega0 * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
-                                             * torch.linalg.norm(model.net[l+1].block.linear.weight, dim=1))
-                elif l > 1:
-                    path_norm += omega0 * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1))
+        elif nonlin == 'bspline-w' and args.path_norm:
+            with torch.no_grad():
+                for l in range(hidden_layers):
+                    if l == 0:
+                        path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
+                                                 * torch.linalg.norm(model.net[l+1].block.linear.weight, dim=0))
+                    elif l > 1:
+                        path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1))
             
             path_norms_array.append(path_norm.item())
 
@@ -244,8 +214,7 @@ if __name__ == '__main__':
             loss_tot = loss_sino + lam*path_norm
         else:
             loss_tot = loss_sino
-            
-        
+
         optimizer.zero_grad()
         loss_tot.backward()
         optimizer.step()
@@ -258,10 +227,7 @@ if __name__ == '__main__':
         
         with torch.no_grad():
             img_estim_cpu = img_estim.detach().cpu().squeeze().numpy()
-            if sys.platform == 'win32':
-                cv2.imshow('Image', img_estim_cpu)
-                cv2.waitKey(1)
-            
+
             loss_gt = ((img_estim - imten)**2).mean()
             loss_array[idx] = loss_gt.item()
             
@@ -285,10 +251,6 @@ if __name__ == '__main__':
     t1 = time.time()
     total_time = t1-t0
     print('Total Train Time: {}'.format(total_time))
-    # print(optimizer.param_groups[-1]['params'][0].item())
-    # for name, param in model.named_parameters():
-    #         if param.requires_grad and name == 'net.0.c':
-    #             print(name, param.data)
     img_estim_cpu = img_estim.detach().cpu().squeeze().numpy()
     
     psnr2 = utils.psnr(img, img_estim_cpu)
@@ -297,15 +259,13 @@ if __name__ == '__main__':
     np.save(os.path.join(save_dir, 'loss_array'), loss_array)
     np.save(os.path.join(save_dir, 'loss_sino_array'), loss_sinogram_array)
     np.save(os.path.join(save_dir, 'path_norm_array'), path_norms_array)
-    np.save(os.path.join(save_dir, 'c_array'), c_array)
     np.save(os.path.join(save_dir, 'recon_img'), img_estim_cpu)
     np.save(os.path.join(save_dir, 'orig_img'), imten.detach().cpu().numpy().squeeze())
 
     mdict = {'rec': img_estim_cpu,
              'gt': imten.detach().cpu().numpy().squeeze(),
              'mse_sinogram_array': loss_sinogram_array, 
-             'mse_array': loss_array,
-             'c_array': c_array}
+             'mse_array': loss_array}
     
     io.savemat(os.path.join(save_dir, 'results.mat'), mdict)
     torch.save(model.state_dict(), os.path.join(save_dir,'model.pt'))

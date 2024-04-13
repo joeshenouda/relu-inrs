@@ -1,20 +1,9 @@
 #!/usr/bin/env python
-
-import os
-import sys
-import glob
-import tqdm
-import pdb
-
-import numpy as np
-from scipy import signal
-
+'''
+Using kornia here for Radon transform because it allows for differentiable CV operations
+'''
 import torch
-from torch import nn
 import kornia
-
-import matplotlib.pyplot as plt
-import cv2
 
 def radon(imten, angles, is_3d=False):
     '''
