@@ -1,33 +1,15 @@
-import os
-import sys
-import tqdm
-from scipy import io
-import argparse
-import numpy as np
-import cv2
-import matplotlib.pyplot as plt
-plt.gray()
-
-from skimage.metrics import structural_similarity as ssim_func
-import torch
 from torch.optim.lr_scheduler import LambdaLR, StepLR, ReduceLROnPlateau
 from modules import models
 from modules import utils
-from modules import lin_inverse
-
-import torch
-from torch import nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
-import os
-import cv2
-from modules import utils
-import numpy as np
-import skimage
-import matplotlib.pyplot as plt
-
 from datetime import datetime
+import tqdm
+import argparse
+import torch
+import os
+import numpy as np
+import matplotlib.pyplot as plt
 import wandb
+plt.gray()
 
 
 if __name__ == '__main__':
@@ -129,19 +111,11 @@ if __name__ == '__main__':
     os.makedirs(save_dir, exist_ok=True)
 
     # Image SetUp
-    if args.image == 'camera':
-        image = utils.normalize(plt.imread('data/cameraman.tif').astype(np.float32), True)
-        H, W = image.shape
-    else:
-        image = utils.normalize(plt.imread('data/lighthouse.png').astype(np.float32), True)
-        image = cv2.resize(image, None, fx=scale_im, fy=scale_im, interpolation=cv2.INTER_AREA)
-        H, W, _ = image.shape
+    image = utils.normalize(plt.imread('data/cameraman.tif').astype(np.float32), True)
+    H, W = image.shape
 
     # This is the ground truth image tensor
-    if args.image == 'camera':
-        img_tensor = torch.tensor(image).to(device).reshape(H * W)[None, ...]
-    else:
-        img_tensor = torch.tensor(image).to(device).reshape(H * W, 3)[None, ...]
+    img_tensor = torch.tensor(image).to(device).reshape(H * W)[None, ...]
 
     x = torch.linspace(-1, 1, W).to(device)
     y = torch.linspace(-1, 1, H).to(device)
@@ -150,9 +124,7 @@ if __name__ == '__main__':
     # use this as the input
     coords = torch.hstack((X.reshape(-1, 1), Y.reshape(-1, 1)))[None, ...]
 
-    out_feats = 3
-    if args.image == 'camera':
-        out_feats=1
+    out_feats = 1
     
     model = models.get_INR(
                 nonlin=nonlin,
@@ -194,12 +166,8 @@ if __name__ == '__main__':
     for idx in tbar:
         model_output = model(coords)
         
-        if args.image == 'camera':
-            estimate_img = model_output.reshape(H, W)
-            loss = ((img_tensor - model_output.squeeze(dim=2)) ** 2).mean()
-        else:
-            estimate_img = model_output.reshape(H, W, 3)
-            loss = ((img_tensor - model_output) ** 2).mean()
+        estimate_img = model_output.reshape(H, W)
+        loss = ((img_tensor - model_output.squeeze(dim=2)) ** 2).mean()
         
         loss_array[idx] = loss.item()
         
