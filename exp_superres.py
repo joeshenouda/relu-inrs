@@ -1,30 +1,19 @@
 #!/usr/bin/env python
 
 import os
-import sys
 from tqdm import tqdm
 import importlib
 import argparse
-
-
 import numpy as np
-from scipy import io
 from skimage.metrics import structural_similarity as ssim_func
-
+import skimage
 import matplotlib.pyplot as plt
-import cv2
-
-from pytorch_msssim import ssim
-
-import torch
 import torch.nn
 from torch.optim.lr_scheduler import LambdaLR
-
 from modules import models
 from modules import utils
-from modules import wire
-
 from datetime import datetime
+import wandb
 
 models = importlib.reload(models)
 
@@ -40,7 +29,6 @@ if __name__ == '__main__':
     parser.add_argument('--sigma0', type=float, default=6.0, help='Global scaling for WIRE activation')
     parser.add_argument('--layers', type=int, default=2, help='Number of hidden layers')
     parser.add_argument('--width', type=int, default=256, help='Width for layers of MLP')
-    parser.add_argument('--init-scale', type=float, default=1, help='Initial scaling to apply to weights')
     parser.add_argument('--lin-layers', action=argparse.BooleanOptionalAction)
 
     # Image arguments
@@ -55,9 +43,9 @@ if __name__ == '__main__':
     parser.add_argument('--lam', type=float, default=0, help='Weight decay/Path Norm param')
     parser.add_argument('--path-norm', action=argparse.BooleanOptionalAction)
     parser.add_argument('--stop-loss', type=float, default=0, help='Stop at this loss')
-    parser.add_argument('--weight-norm', action='store_true', help='Use weight normalization')
     parser.add_argument('--device', type=int, default=0, help='GPU to use')
     parser.add_argument('--rand-seed', type=int, default=40)
+    parser.add_argument('--wandb', action='store_true', help='Turn on wandb')
 
     # Parse the arguments
     args = parser.parse_args()
@@ -65,25 +53,49 @@ if __name__ == '__main__':
     nonlin = args.act_func         # type of nonlinearity, 'wire', 'siren', 'relu', 'posenc'
     niters = args.epochs           # Number of SGD iterations
     learning_rate = args.lr        # Learning rate. 
-    
-    # WIRE works best at 5e-3 to 2e-2, Gauss and SIREN at 1e-3 - 2e-3,
-    # and positional encoding at 5e-4 to 1e-3 
+
+    if args.wandb:
+        now = datetime.now().strftime("%m%d%Y%H%M")
+        name = ('act_{}_lr_{}_epochs_{}_{}'
+                .format(args.act_func, args.lr, args.epochs, now))
+        if args.act_func == 'bspline-w':
+            name = ('act_{}_c_{}_lr_{}_epochs_{}_{}'
+                    .format(args.act_func, args.c, args.lr, args.epochs, now))
+        elif args.act_func == 'wire':
+            name = ('act_{}_omega0_{}_sigma0_{}_lr_{}_epochs_{}_{}'
+                    .format(args.act_func, args.omega0, args.sigma0, args.lr, args.epochs, now))
+        elif args.act_func == 'siren':
+            name = ('act_{}_omega0_{}_lr_{}_epochs_{}_{}'
+                    .format(args.act_func, args.omega0, args.lr, args.epochs, now))
+        project_name = 'superresolution'
+        # start a new wandb run to track this script
+        run = wandb.init(
+            entity='activation-func',
+            # set the wandb project where this run will be logged
+            project=project_name,
+            name=name,
+            # track hyperparameters and run metadata
+            config=args,
+            id=name
+        )
+
     scale = args.scale                   # Downsampling factor
 
     #scale_im = 1/3
     scale_im = 1/args.scale_im              # Initial image downsample for memory reasons
 
     # Gabor filter constants,
-    # If you want the original values for omega0 and sigma0 use default of the args
     omega0 = args.omega0          # Frequency of sinusoid
     sigma0 = args.sigma0          # Sigma of Gaussian
-    c = args.c                    # Scaling for BW-ReLU
+
+    # For BW-ReLu
+    c = args.c
     
     # Network parameters
     hidden_layers = args.layers    # Number of hidden layers in the MLP
     hidden_features = args.width   # Number of hidden units per layer
     device = 'cuda:{}'.format(args.device) if torch.cuda.is_available() else 'cpu'
-    import ipdb; ipdb.set_trace()
+
     save_dir = 'results/sisr/{}_SR_img_scale_{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_{}'.format(nonlin,
                                                                                                         scale_im,
                                                                                                         c,
@@ -101,22 +113,18 @@ if __name__ == '__main__':
 
     # Read image
     im = utils.normalize(plt.imread('data/{}.png'.format(args.image)).astype(np.float32), True)
-
+    H, W, _ = im.shape
     # This is just an initial downscale operation that we do for memory reasons
-    im = cv2.resize(im, None, fx=scale_im, fy=scale_im, interpolation=cv2.INTER_AREA)
+    im = skimage.transform.resize(im, (H//args.scale_im, W//args.scale_im), anti_aliasing=True)
     H, W, _ = im.shape
     
     im = im[:scale*(H//scale), :scale*(W//scale), :]
     H, W, _ = im.shape
 
     # True low resolution image
-    im_lr = cv2.resize(im, None, fx=1/scale, fy=1/scale,
-                       interpolation=cv2.INTER_AREA)
+    im_lr = skimage.transform.resize(im, (H//scale, W//scale), anti_aliasing=True)
     H2, W2, _ = im_lr.shape
 
-    # A benchmark for our method below.
-    im_bi = cv2.resize(im_lr, None, fx=scale, fy=scale,
-                       interpolation=cv2.INTER_LINEAR)
     
     if nonlin == 'posenc':
         nonlin = 'relu'
@@ -139,8 +147,6 @@ if __name__ == '__main__':
                     scale=sigma0,
                     pos_encode=posencode,
                     sidelength=sidelength,
-                    weight_norm=args.weight_norm,
-                    init_scale=args.init_scale,
                     linear_layers=args.lin_layers)
 
     print(model)
@@ -175,9 +181,6 @@ if __name__ == '__main__':
     gt_lr = torch.tensor(im_lr).to(device).reshape(H2*W2, 3)[None, ...]
     
     im_gt = gt.reshape(H, W, 3).permute(2, 0, 1)[None, ...]
-    im_bi_ten = torch.tensor(im_bi).to(device).permute(2, 0, 1)[None, ...]
-    
-    print(utils.psnr(im, im_bi), ssim_func(im, im_bi, channel_axis=2))
 
     mse_hr_array = [] # high res mse (test error)
     mse_lr_array = [] # low res mse  (train error)
@@ -211,7 +214,7 @@ if __name__ == '__main__':
             for l in range(hidden_layers):
                 if l == 0:
                     path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
-                                                    * torch.linalg.norm(model.net[l + 1].block.linear.weight, dim=1))
+                                                    * torch.linalg.norm(model.net[l + 1].block.linear.weight, dim=0))
                 elif l > 1:
                     path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1))
 
@@ -247,10 +250,7 @@ if __name__ == '__main__':
             torch.save(model.state_dict(), os.path.join(save_dir, 'model_t_{}.pt'.format(epoch)))
 
         imrec = im_rec.squeeze().permute(1, 2, 0).detach().cpu().numpy()
-        
-        if sys.platform == 'win32':
-            cv2.imshow('Reconstruction', imrec[..., ::-1])
-            cv2.waitKey(1)
+
         
         if mse_hr_array[epoch] < best_mse:
             best_mse = mse_hr_array[epoch]
