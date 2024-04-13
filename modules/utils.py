@@ -16,11 +16,6 @@ from scipy import signal
 
 import torch
 
-# Plotting
-import cv2
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-
 def normalize(x, fullnormalize=False):
     '''
         Normalize input to lie between 0, 1.
@@ -158,26 +153,6 @@ def get_coords(H, W, T=None):
     
     return torch.tensor(coords.astype(np.float32))
 
-def resize(cube, scale):
-    '''
-        Resize a multi-channel image
-        
-        Inputs:
-            cube: (H, W, nchan) image stack
-            scale: Scaling 
-    '''
-    H, W, nchan = cube.shape
-    
-    im0_lr = cv2.resize(cube[..., 0], None, fx=scale, fy=scale)
-    Hl, Wl = im0_lr.shape
-    
-    cube_lr = np.zeros((Hl, Wl, nchan), dtype=cube.dtype)
-    
-    for idx in range(nchan):
-        cube_lr[..., idx] = cv2.resize(cube[..., idx], None,
-                                       fx=scale, fy=scale,
-                                       interpolation=cv2.INTER_AREA)
-    return cube_lr
 
 def get_inpainting_mask(imsize, mask_type='random2d', mask_frac=0.5):
     '''
