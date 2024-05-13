@@ -23,13 +23,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='CT Reconstruction')
 
     # Model Arguments
-    parser.add_argument('-af', '--act-func', type=str, default='bspline-w', help='Activation function to use (bspline-w, wire, siren)')
+    parser.add_argument('-af', '--act-func', type=str, default='bspline-w', help='Activation function to use (bspline-w, wire, siren, posenc)')
     parser.add_argument('--c', type=float, default=1.0, help='Global scaling for BW-ReLU activation')
     parser.add_argument('--omega0', type=float, default=1, help='number of omega_0')
     parser.add_argument('--sigma0', type=float, default=10, help='number of sigma_0')
     parser.add_argument('--layers', type=int, default=3, help='Layers for the MLP')
+    parser.add_argument('--lin-layers', action = argparse.BooleanOptionalAction)
     parser.add_argument('--width', type=int, default=300, help='Width for MLP')
-    parser.add_argument('--lin-layers', action=argparse.BooleanOptionalAction)
 
     # Image arguments
     parser.add_argument('--meas', type=int, default=100, help='Number of projection measurements')
@@ -50,7 +50,7 @@ if __name__ == '__main__':
     # Parse the arguments
     args = parser.parse_args()
 
-    nonlin = args.act_func      # type of nonlinearity, 'bspline-w', 'wire', 'siren', 'relu', 'posenc', 'gauss'
+    nonlin = args.act_func      # type of nonlinearity, 'bspline-w', 'wire', 'siren', 'relu', 'posenc'
     niters = args.epochs            # Number of SGD iterations
     learning_rate = args.lr        # Learning rate.
     lam = args.lam
@@ -94,19 +94,20 @@ if __name__ == '__main__':
     hidden_features = args.width  # Number of hidden units per layer
     device = 'cuda:{}'.format(args.device)
 
-    save_dir = 'results/ct/{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_seed_{}_{}'.format(nonlin,
-                                                                                                    args.c,
-                                                                                                    args.omega0,
-                                                                                                    args.sigma0,
-                                                                                                    learning_rate, 
-                                                                                                    args.lam, 
-                                                                                                    args.path_norm, 
-                                                                                                    args.width, 
-                                                                                                    args.layers, 
-                                                                                                    args.lin_layers,
-                                                                                                    args.epochs,
-                                                                                                    args.rand_seed,      
-                                                                                                    datetime.now().strftime('%m%d_%H%M'))
+    save_dir = 'results/ct/{}_{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_seed_{}'\
+        .format(datetime.now().strftime('%m%d_%H%M'),
+                nonlin,
+                args.c,
+                args.omega0,
+                args.sigma0,
+                learning_rate,
+                args.lam,
+                args.path_norm,
+                args.width,
+                args.layers,
+                args.lin_layers,
+                args.epochs,
+                args.rand_seed)
     # Create model
     if nonlin == 'posenc':
         nonlin = 'relu'
@@ -167,7 +168,7 @@ if __name__ == '__main__':
         optimizer = torch.optim.Adam(lr=learning_rate, params=model.parameters(), weight_decay=lam)
     
     # Schedule to 0.1 times the initial rate
-    scheduler = LambdaLR(optimizer, lambda x:args.lr_decay**min(x/niters, 1))
+    scheduler = LambdaLR(optimizer, lambda x:args.lr_decay**min(x/5000, 1))
 
     best_loss = float('inf')
     loss_array = np.zeros(niters)
@@ -194,23 +195,22 @@ if __name__ == '__main__':
 
         if nonlin == 'bspline-w' and args.lin_layers:
             for l in range(hidden_layers):
-               path_norm += omega0*torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
-                                             * torch.linalg.norm(model.net[l].block.linear2.weight, dim=0))
+                path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
+                                         * torch.linalg.norm(model.net[l].block.linear2.weight, dim=0))
+
             lam = args.lam
             path_norms_array.append(path_norm.item())
-        
+
         elif nonlin == 'bspline-w' and args.path_norm:
             with torch.no_grad():
                 for l in range(hidden_layers):
                     if l == 0:
                         path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
-                                                 * torch.linalg.norm(model.net[l+1].block.linear.weight, dim=0))
+                                                 * torch.linalg.norm(model.net[l+1].block.linear.weight, dim=1))
                     elif l > 1:
-                        path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1))
-            
-            path_norms_array.append(path_norm.item())
+                        path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=0))
 
-        if args.path_norm and args.lin_layers:
+        if args.path_norm:
             loss_tot = loss_sino + lam*path_norm
         else:
             loss_tot = loss_sino
@@ -274,7 +274,7 @@ if __name__ == '__main__':
     best_im_np = best_im.detach().cpu().numpy().squeeze()
     best_im_cn = (best_im_np - np.min(best_im_np))/ (np.max(best_im_np) - np.min(best_im_np))
 
-    plt.imsave(os.path.join(save_dir, 'recon.pdf'), best_im_cn, cmap='gray', vmin=0, vmax=1, dpi=300)
+    plt.imsave(os.path.join(save_dir, 'recon.pdf'), img_estim_cpu, cmap='gray', vmin=0, vmax=1, dpi=300)
     plt.imsave(os.path.join(save_dir, 'orig.pdf'), imten.detach().cpu().numpy().squeeze(), cmap='gray', vmin=0, vmax=1, dpi=300)
     
 

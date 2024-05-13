@@ -57,7 +57,7 @@ def get_INR(nonlin, in_features, hidden_features, hidden_layers,
                         weight_norm=weight_norm,
                         skip_conn=skip_conn,
                         init_scale=init_scale,
-                        linear_layers = linear_layers,
+                        linear_layers=linear_layers,
                         learn_c=learn_c)
     else:
         model = inr_mod.INR(in_features,

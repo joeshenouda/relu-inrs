@@ -96,19 +96,20 @@ if __name__ == '__main__':
     hidden_features = args.width   # Number of hidden units per layer
     device = 'cuda:{}'.format(args.device) if torch.cuda.is_available() else 'cpu'
 
-    save_dir = 'results/sisr/{}_SR_img_scale_{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_{}'.format(nonlin,
-                                                                                                        scale_im,
-                                                                                                        c,
-                                                                                                        omega0,
-                                                                                                        sigma0,
-                                                                                                        learning_rate, 
-                                                                                                        args.lam,  
-                                                                                                        args.path_norm, 
-                                                                                                        args.width, 
-                                                                                                        args.layers, 
-                                                                                                        args.epochs,
-                                                                                                        args.lin_layers,                   
-                                                                                                        datetime.now().strftime('%m%d_%H%M'))
+    save_dir = 'results/superres/{}_{}_SR_img_scale_{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}'\
+        .format(datetime.now().strftime('%m%d_%H%M'),
+        nonlin,
+        scale_im,
+        c,
+        omega0,
+        sigma0,
+        learning_rate,
+        args.lam,
+        args.path_norm,
+        args.width,
+        args.layers,
+        args.epochs,
+        args.lin_layers)
     os.makedirs(save_dir, exist_ok=True)
 
     # Read image
@@ -189,6 +190,7 @@ if __name__ == '__main__':
     cond_num_iters = []
     cond_num_array = []
     path_norms_array = []
+    learning_rates = []
     
     best_mse = float('inf')
     best_img = None
@@ -216,7 +218,7 @@ if __name__ == '__main__':
                     path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1) \
                                                     * torch.linalg.norm(model.net[l + 1].block.linear.weight, dim=0))
                 elif l > 1:
-                    path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=1))
+                    path_norm += c * torch.sum(torch.linalg.norm(model.net[l].block.linear.weight, dim=0))
 
             path_norms_array.append(path_norm.item())
 
@@ -255,7 +257,9 @@ if __name__ == '__main__':
         if mse_hr_array[epoch] < best_mse:
             best_mse = mse_hr_array[epoch]
             best_img = imrec
+        # track learning rate
 
+        learning_rates.append(optim.param_groups[0]['lr'])
         loss.backward()
         optim.step()
         scheduler.step()
@@ -265,9 +269,9 @@ if __name__ == '__main__':
             break
 
     final_mse = mse_hr_array[-1]
-    final_path_norm = path_norms_array[-1]
     print('\nFinal PSNR: {}, Final SSIM:{}'.format(-10*np.log10(final_mse), ssim_array[-1]))
-    if args.path_norm:
+    if args.path_norm and nonlin == 'bspline-w':
+        final_path_norm = path_norms_array[-1]
         print('Final Path Norm: {}'.format(final_path_norm))
         
 
@@ -291,3 +295,4 @@ if __name__ == '__main__':
     plt.imsave(os.path.join(save_dir, 'recon.pdf'), np.clip(imrec, 0, 1), dpi=500)
     plt.imsave(os.path.join(save_dir, 'im_lr.pdf'), np.clip(im_lr, 0, 1), dpi=500)
     plt.imsave(os.path.join(save_dir, 'im_hr.pdf'), np.clip(im, 0, 1), dpi=500)
+

@@ -88,19 +88,20 @@ if __name__ == '__main__':
     device = 'cuda:{}'.format(args.device) if torch.cuda.is_available() else 'cpu'
     lr_scheduler = args.lr_scheduler
 
-    save_dir = 'results/signal_representation/{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_seed_{}_{}'.format(nonlin,
-                                                                                            args.c,
-                                                                                            args.omega0,
-                                                                                            args.sigma0,
-                                                                                            learning_rate, 
-                                                                                            args.lam, 
-                                                                                            args.path_norm, 
-                                                                                            args.width, 
-                                                                                            args.layers, 
-                                                                                            args.lin_layers,
-                                                                                            args.epochs,
-                                                                                            args.rand_seed,      
-                                                                                            datetime.now().strftime('%m%d_%H%M'))
+    save_dir = 'results/signal_representation/{}_{}_c_{}_omega_{}_sigma_{}_lr_{}_lam_{}_PN_{}_width_{}_layers_{}_lin_{}_epochs_{}_seed_{}'\
+        .format(datetime.now().strftime('%m%d_%H%M'),
+        nonlin,
+        args.c,
+        args.omega0,
+        args.sigma0,
+        learning_rate,
+        args.lam,
+        args.path_norm,
+        args.width,
+        args.layers,
+        args.lin_layers,
+        args.epochs,
+        args.rand_seed)
     
     if nonlin == 'posenc':
         nonlin = 'relu'

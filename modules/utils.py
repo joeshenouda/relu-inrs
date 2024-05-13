@@ -207,7 +207,7 @@ def get_layer_outputs(model, coords, imsize,
         layer_output = model.net[idx](coords)
         layer_images = layer_output.reshape(1, H, W, -1)[0]
         
-        if nfilters_vis is not 'all':
+        if nfilters_vis != 'all':
             layer_images = layer_images[..., :nfilters_vis]
         
         if get_imag:
