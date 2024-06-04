@@ -3,15 +3,16 @@
 ## Setup
 
 With conda:
-``
+
+```
 conda create -n relu-inrs python=3.9
 conda activate relu-inrs
 pip install -r requirements.txt
-``
+```
 
 Then download the data by running the following in your terminal:
-``gdown --folder
-https://drive.google.com/drive/folders/15d1uva70kgNMi5yClP6tsP6DLv6uzr5_?usp=drive_link``
+
+```gdown --folder https://drive.google.com/drive/folders/15d1uva70kgNMi5yClP6tsP6DLv6uzr5_?usp=drive_link```
 
 ## CT Experiments
 To reproduce the BW-ReLU experiment for the CT reconstruction task (Figure 4) run the following:
