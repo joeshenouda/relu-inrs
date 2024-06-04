@@ -1,5 +1,7 @@
 # relu-inrs
 
+To get started right away you can check out the following [Google Colab](https://colab.research.google.com/drive/1LQbGQTBodIhtgiqJLsttet5EFq9oWi84?usp=sharing)
+
 ## Setup
 
 With conda:
