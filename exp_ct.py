@@ -168,7 +168,7 @@ if __name__ == '__main__':
         optimizer = torch.optim.Adam(lr=learning_rate, params=model.parameters(), weight_decay=lam)
     
     # Schedule to 0.1 times the initial rate
-    scheduler = LambdaLR(optimizer, lambda x:args.lr_decay**min(x/5000, 1))
+    scheduler = LambdaLR(optimizer, lambda x:args.lr_decay**min(x/5000,1))
 
     best_loss = float('inf')
     loss_array = np.zeros(niters)
