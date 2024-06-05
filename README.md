@@ -36,3 +36,5 @@ To reproduce the BW-ReLU experiment for the superresolution task (Figure 6) run 
 
 ``python exp_superres.py -af='bspline-w' --c=3 --lr=3e-3 --layers=3 --width=256 --path-norm``
 
+## Low Norm Solutions and Inverse Problems
+To reproduce the findings in Figure 7 run the script in `experiments_script/run_low_norm_inv.sh`.
